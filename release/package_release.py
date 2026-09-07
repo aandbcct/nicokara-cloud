@@ -30,9 +30,9 @@ def main() -> None:
             raise SystemExit(f"Build is older than {name}; rebuild before packaging.")
     version = json.loads(git("show", "HEAD:frontend/package.json"))["version"]
     release_id = datetime.now().strftime("%Y%m%d-%H%M%S")
-    name = f"nicokara-cloud-v{version}-{source[:7]}-{release_id}"
+    release_name = f"nicokara-cloud-v{version}-{source[:7]}-{release_id}"
     output = ROOT / "release"
-    archive_path = output / f"{name}.tar.gz"
+    archive_path = output / f"{release_name}.tar.gz"
     hashes: dict[str, str] = {}
     with tarfile.open(archive_path, "x:gz", format=tarfile.PAX_FORMAT) as archive:
         def add(name: str, data: bytes) -> None:
@@ -64,13 +64,13 @@ def main() -> None:
         }, indent=2).encode())
         add("FILE_SHA256SUMS", "".join(f"{digest}  {name}\n" for name, digest in sorted(hashes.items())).encode())
     digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
-    checksum = output / f"{name}.tar.gz.sha256"
+    checksum = output / f"{release_name}.tar.gz.sha256"
     checksum.write_text(f"{digest}  {archive_path.name}\n", encoding="utf-8", newline="\n")
     template = git("show", "HEAD:release/deploy-update.template.sh").decode()
     for key, value in {"RELEASE_ID": release_id, "SOURCE_COMMIT": source,
                        "ARCHIVE_NAME": archive_path.name, "SHA256": digest}.items():
         template = template.replace(f"@@{key}@@", value)
-    script = output / f"deploy-{name}.sh"
+    script = output / f"deploy-{release_name}.sh"
     script.write_text(template, encoding="utf-8", newline="\n")
     instructions = output / f"部署说明-v{version}-{source[:7]}-{release_id}.md"
     instructions.write_text(f"""# 本次部署
