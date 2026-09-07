@@ -805,7 +805,9 @@ def test_completed_timeline_can_be_downloaded(tmp_path: Path) -> None:
         timeline_response = client.get(f"/api/v1/jobs/{job_id}/timeline")
 
     assert timeline_response.status_code == 200
-    assert timeline_response.json() == timeline
+    payload = timeline_response.json()
+    assert payload.pop("source_revision").startswith("0:")
+    assert payload == timeline
 
 
 def test_generated_ass_can_be_downloaded(tmp_path: Path) -> None:
@@ -941,6 +943,9 @@ def _prepare_reviewable_job(client: TestClient, tmp_path: Path) -> tuple[str, di
         ],
         "style": {"font_size": 70, "color_after": "#112233"},
     }
+    review["source_revision"] = client.get(
+        f"/api/v1/jobs/{job_id}/timeline"
+    ).json()["source_revision"]
     return job_id, review
 
 

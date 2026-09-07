@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from app.core.processing_control import ProcessingInterrupted, run_process
 from pathlib import Path
 from typing import Sequence
 
@@ -127,7 +128,7 @@ class FFmpegVideoRenderer:
             else:
                 cmd.extend(["-c:a", "copy"])
             cmd.extend(["-movflags", "+faststart", output_path.name])
-            subprocess.run(
+            run_process(
                 cmd,
                 cwd=job_dir,
                 check=True,
@@ -140,6 +141,9 @@ class FFmpegVideoRenderer:
                 raise VideoRenderingError(
                     "FFmpeg did not produce a non-empty output video"
                 )
+        except ProcessingInterrupted:
+            output_path.unlink(missing_ok=True)
+            raise
         except subprocess.TimeoutExpired as exc:
             output_path.unlink(missing_ok=True)
             raise VideoRenderingError(

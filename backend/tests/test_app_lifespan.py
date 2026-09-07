@@ -318,3 +318,28 @@ def test_cors_preflight_allows_common_local_frontend_origins(
 
             assert response.status_code == 200
             assert response.headers["access-control-allow-origin"] == origin
+
+
+def test_cors_preflight_allows_review_and_admin_updates(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        storage_dir=tmp_path / "jobs",
+        processing_enabled=False,
+    )
+    origin = "http://localhost:3000"
+    with TestClient(create_app(settings)) as client:
+        for path in (
+            "/api/v1/jobs/00000000-0000-0000-0000-000000000001/timeline-review",
+            "/api/v1/admin/traffic/daily",
+        ):
+            response = client.options(
+                path,
+                headers={
+                    "Origin": origin,
+                    "Access-Control-Request-Method": "PUT",
+                    "Access-Control-Request-Headers": "content-type,authorization",
+                },
+            )
+            assert response.status_code == 200
+            assert response.headers["access-control-allow-origin"] == origin
+            assert "PUT" in response.headers["access-control-allow-methods"]

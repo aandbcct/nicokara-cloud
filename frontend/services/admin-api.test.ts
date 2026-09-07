@@ -5,7 +5,9 @@ import {
   getAdminLogs,
   getAdminJobTimeline,
   getAdminOverview,
+  getAdminTraffic,
   requeueAdminJob,
+  updateAdminDailyTraffic,
 } from "./admin-api";
 
 
@@ -85,6 +87,42 @@ describe("admin API", () => {
       2,
       "/api/v1/admin/jobs/job-1/requeue",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("loads a selected traffic range and saves a daily correction", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(
+        JSON.stringify({ pageviews: 10, visits: 5, series: [] }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getAdminTraffic("secret-token", "2026-09-01", "2026-09-05");
+    await updateAdminDailyTraffic("secret-token", "2026-09-06", {
+      pageviews: 9,
+      visits: 4,
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/admin/traffic?date_from=2026-09-01&date_to=2026-09-05",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer secret-token" },
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/admin/traffic/daily/2026-09-06",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ pageviews: 9, visits: 4 }),
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+          "Content-Type": "application/json",
+        }),
+      }),
     );
   });
 

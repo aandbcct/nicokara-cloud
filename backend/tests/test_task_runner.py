@@ -168,7 +168,7 @@ def test_runner_finishes_active_job_when_hot_shrinking() -> None:
     assert asyncio.run(scenario()) == 2
 
 
-def test_runner_accepts_jobs_into_an_unbounded_fifo_queue() -> None:
+def test_runner_bounds_the_fifo_queue_and_deduplicates_jobs() -> None:
     runner_module = importlib.import_module("app.tasks.runner")
 
     class Pipeline:
@@ -181,14 +181,15 @@ def test_runner_accepts_jobs_into_an_unbounded_fifo_queue() -> None:
             max_pending_jobs=1,
         )
         await runner.enqueue("first")
-        await runner.enqueue("second")
+        await runner.enqueue("first")
+        with pytest.raises(runner_module.QueueCapacityError):
+            await runner.enqueue("second")
+        assert not runner.can_accept
         first = runner.queue.get_nowait()
         runner.queue.task_done()
-        second = runner.queue.get_nowait()
-        runner.queue.task_done()
-        return [first, second]
+        return [first]
 
-    assert asyncio.run(scenario()) == ["first", "second"]
+    assert asyncio.run(scenario()) == ["first"]
 
 
 def test_runner_reservation_api_remains_compatible() -> None:
@@ -204,7 +205,9 @@ def test_runner_reservation_api_remains_compatible() -> None:
             max_pending_jobs=1,
         )
         reservation = runner.reserve()
-        assert runner.can_accept
+        assert not runner.can_accept
+        with pytest.raises(runner_module.QueueCapacityError):
+            runner.reserve()
 
         reservation.release()
         assert runner.can_accept
@@ -212,7 +215,7 @@ def test_runner_reservation_api_remains_compatible() -> None:
         replacement = runner.reserve()
         await replacement.enqueue("first")
         assert runner.queue.qsize() == 1
-        assert runner.can_accept
+        assert not runner.can_accept
 
     asyncio.run(scenario())
 
@@ -290,3 +293,43 @@ def test_runner_snapshot_reports_heartbeat_and_active_jobs() -> None:
         }
     ]
     assert busy_snapshot["queued_in_memory"] == 0
+
+
+def test_persistent_dispatcher_recovers_after_a_database_error() -> None:
+    from app.tasks.runner import LocalTaskRunner, dispatch_pending_jobs
+
+    class Database:
+        calls = 0
+        completed = False
+
+        def list_job_ids(self, *, status):
+            self.calls += 1
+            if self.calls == 1:
+                raise OSError("temporary database failure")
+            return [] if self.completed else ["one"]
+
+        def get_job(self, job_id):
+            return {"status": "UPLOADED"}
+
+    database = Database()
+
+    class Pipeline:
+        def process(self, job_id):
+            database.completed = True
+
+    async def scenario():
+        runner = LocalTaskRunner(Pipeline(), max_pending_jobs=1)
+        await runner.start()
+        dispatcher = asyncio.create_task(dispatch_pending_jobs(database, runner))
+        try:
+            async with asyncio.timeout(2):
+                while not database.completed:
+                    if dispatcher.done():
+                        await dispatcher
+                    await asyncio.sleep(0.02)
+        finally:
+            dispatcher.cancel()
+            await asyncio.gather(dispatcher, return_exceptions=True)
+            await runner.stop()
+
+    asyncio.run(scenario())

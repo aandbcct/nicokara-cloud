@@ -14,6 +14,9 @@ import {
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import { AdminSectionNav } from "@/components/admin-section-nav";
+import { AdminLogDetails as LogDetails } from "@/components/admin-log-details";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { adminStageLabel } from "@/lib/admin-presentation";
 import {
   AdminApiError,
   getAdminJobTimeline,
@@ -51,8 +54,8 @@ function formatTime(value: string): string {
 
 
 function levelClass(level: string): string {
-  if (level === "ERROR") return "text-destructive";
-  if (level === "WARNING") return "text-amber-700";
+  if (["ERROR", "CRITICAL"].includes(level)) return "text-destructive";
+  if (level === "WARNING") return "text-amber-700 dark:text-amber-300";
   return "text-foreground";
 }
 
@@ -72,32 +75,19 @@ function normalizeDateTimeFilter(value?: string): string | undefined {
 
 
 function eventStateClass(item: AdminLogItem): string {
-  if (item.event.includes("failed") || item.level === "ERROR") {
+  if (item.event.includes("failed") || ["ERROR", "CRITICAL"].includes(item.level)) {
     return "border-l-4 border-l-destructive bg-destructive/5";
   }
   if (item.event.includes("fallback") || item.level === "WARNING") {
-    return "border-l-4 border-l-amber-500 bg-amber-50/60";
+    return "border-l-4 border-l-amber-500 bg-amber-50/60 dark:bg-amber-950/30";
   }
   if (item.event.includes("skipped")) {
     return "border-l-4 border-l-muted-foreground bg-muted/40";
   }
   if (item.event.includes("completed")) {
-    return "border-l-4 border-l-emerald-600 bg-emerald-50/50";
+    return "border-l-4 border-l-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/30";
   }
   return "border-l-4 border-l-transparent";
-}
-
-
-function LogDetails({ item }: { item: AdminLogItem }) {
-  if (Object.keys(item.details).length === 0) return <span className="text-muted-foreground">-</span>;
-  return (
-    <details>
-      <summary className="cursor-pointer text-xs font-medium text-primary">查看</summary>
-      <pre className="mt-2 max-w-80 overflow-x-auto whitespace-pre-wrap break-all text-xs leading-5 text-muted-foreground">
-        {JSON.stringify(item.details, null, 2)}
-      </pre>
-    </details>
-  );
 }
 
 
@@ -131,18 +121,20 @@ export function AdminLogsView({
   return (
     <div className="space-y-5">
       <form
-        className="grid gap-3 border-y bg-card py-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 xl:items-end"
+        className="space-y-3 border-y bg-card py-4"
         onSubmit={(event) => {
           event.preventDefault();
           onApplyFilters();
         }}
       >
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="text-xs font-medium text-muted-foreground">
           日志级别
           <select value={filters.level ?? ""} onChange={(event) => updateFilter("level", event.target.value)} className="focus-ring mt-1 block min-h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground">
             <option value="">全部级别</option>
             <option value="DEBUG">DEBUG</option>
             <option value="ERROR">错误</option>
+            <option value="CRITICAL">严重错误</option>
             <option value="WARNING">警告</option>
             <option value="INFO">信息</option>
           </select>
@@ -159,8 +151,21 @@ export function AdminLogsView({
             <option value="queue">队列</option>
             <option value="request">请求</option>
             <option value="cleanup">清理</option>
+            <option value="external">外部服务</option>
           </select>
         </label>
+        <label className="text-xs font-medium text-muted-foreground">
+          关键词
+          <input value={filters.query ?? ""} onChange={(event) => updateFilter("query", event.target.value)} className="focus-ring mt-1 block min-h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground" />
+        </label>
+        <label className="text-xs font-medium text-muted-foreground">
+          任务或上传 ID
+          <input value={filters.referenceId ?? ""} onChange={(event) => updateFilter("referenceId", event.target.value)} className="focus-ring mt-1 block min-h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground" />
+        </label>
+        </div>
+        <details>
+          <summary className="min-h-8 cursor-pointer text-xs font-medium text-primary">高级筛选</summary>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="text-xs font-medium text-muted-foreground">
           事件名
           <input value={filters.event ?? ""} onChange={(event) => updateFilter("event", event.target.value)} placeholder="stage.fallback" className="focus-ring mt-1 block min-h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground" />
@@ -182,14 +187,6 @@ export function AdminLogsView({
           <input value={filters.requestId ?? ""} onChange={(event) => updateFilter("requestId", event.target.value)} className="focus-ring mt-1 block min-h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground" />
         </label>
         <label className="text-xs font-medium text-muted-foreground">
-          任务或上传 ID
-          <input value={filters.referenceId ?? ""} onChange={(event) => updateFilter("referenceId", event.target.value)} className="focus-ring mt-1 block min-h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground" />
-        </label>
-        <label className="text-xs font-medium text-muted-foreground">
-          关键词
-          <input value={filters.query ?? ""} onChange={(event) => updateFilter("query", event.target.value)} className="focus-ring mt-1 block min-h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground" />
-        </label>
-        <label className="text-xs font-medium text-muted-foreground">
           开始时间
           <input type="datetime-local" value={filters.createdFrom ?? ""} onChange={(event) => updateFilter("createdFrom", event.target.value)} className="focus-ring mt-1 block min-h-10 w-full rounded-md border bg-background px-3 text-sm text-foreground" />
         </label>
@@ -203,50 +200,40 @@ export function AdminLogsView({
             <option value="desc">最新在前</option><option value="asc">最早在前</option>
           </select>
         </label>
+          </div>
+        </details>
+        <div className="flex flex-wrap gap-3">
         <button type="button" disabled={!filters.referenceId} onClick={() => onOpenTimeline(filters.referenceId ?? "")} className="focus-ring inline-flex min-h-10 items-center justify-center gap-2 rounded-md border px-4 text-sm font-semibold disabled:opacity-40">
           <Clock3 className="size-4" aria-hidden="true" />任务时间线
         </button>
         <button type="submit" disabled={loading} className="focus-ring inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50">
           <Search className="size-4" aria-hidden="true" />筛选
         </button>
+        </div>
       </form>
 
-      <div className="overflow-x-auto border-y bg-card">
-        <table className="w-full min-w-[1440px] text-left text-sm">
-          <thead className="border-b bg-muted/70 text-xs text-muted-foreground">
-            <tr>
-              <th className="p-3">时间</th>
-              <th className="p-3">级别</th>
-              <th className="p-3">分类</th>
-              <th className="p-3">事件</th>
-              <th className="p-3">关联 ID</th>
-              <th className="p-3">阶段 / 组件</th>
-              <th className="p-3">运行批次</th>
-              <th className="p-3">耗时</th>
-              <th className="p-3">消息</th>
-              <th className="p-3">详情</th>
-            </tr>
-          </thead>
-          <tbody>
-            {response.items.map((item) => (
-              <tr key={item.id} className={`border-b align-top last:border-b-0 ${eventStateClass(item)}`}>
-                <td className="whitespace-nowrap p-3 text-xs text-muted-foreground">{formatTime(item.created_at)}</td>
-                <td className={`p-3 font-semibold ${levelClass(item.level)}`}>{item.level}</td>
-                <td className="p-3">{item.category}</td>
-                <td className="p-3 font-mono text-xs">{item.event}</td>
-                <td className="max-w-56 break-all p-3 font-mono text-xs">{item.reference_id ?? "-"}</td>
-                <td className="p-3 text-xs"><span className="font-mono">{item.stage ?? "-"}</span><br /><span className="text-muted-foreground">{item.component ?? "-"}</span></td>
-                <td className="max-w-48 break-all p-3 font-mono text-xs">{item.run_id ?? "-"}</td>
-                <td className="whitespace-nowrap p-3 text-xs">{formatDuration(item.duration_ms)}</td>
-                <td className="max-w-80 break-words p-3">{item.message}</td>
-                <td className="p-3"><LogDetails item={item} /></td>
-              </tr>
-            ))}
-            {response.items.length === 0 && (
-              <tr><td colSpan={10} className="p-12 text-center text-muted-foreground">没有符合条件的日志</td></tr>
-            )}
-          </tbody>
-        </table>
+      <div className="min-w-0 border-y bg-card" aria-label="日志列表" aria-busy={loading}>
+        {response.items.map((item) => (
+          <article key={item.id} className={`grid min-w-0 gap-4 border-b p-4 last:border-b-0 lg:grid-cols-[190px_minmax(0,1fr)_230px] ${eventStateClass(item)}`}>
+            <div className="min-w-0 space-y-1 text-xs">
+              <p className={`font-semibold ${levelClass(item.level)}`}>{({ ERROR: "错误", CRITICAL: "严重错误", WARNING: "警告", INFO: "信息", DEBUG: "调试" } as Record<string, string>)[item.level] ?? item.level} · {item.level}</p>
+              <time className="block text-muted-foreground">{formatTime(item.created_at)}</time>
+              <p title={item.stage ?? undefined}>{adminStageLabel(item.stage)}</p>
+              <p className="break-all text-muted-foreground">{item.component ?? item.category} · {formatDuration(item.duration_ms)}</p>
+            </div>
+            <div className="min-w-0">
+              <h2 className="mb-2 whitespace-pre-wrap break-words text-sm font-semibold [overflow-wrap:anywhere]">{item.message}</h2>
+              <LogDetails item={item} />
+            </div>
+            <div className="min-w-0 space-y-2 break-all text-xs text-muted-foreground">
+              <p className="font-mono">{item.event}</p>
+              {item.reference_id && <p><span className="block">关联 ID</span>{item.reference_type === "job" ? <button type="button" onClick={() => onOpenTimeline(item.reference_id!)} title="查看任务时间线" className="focus-ring min-h-8 break-all text-left font-mono text-primary hover:underline">{item.reference_id}</button> : <span className="font-mono">{item.reference_id}</span>}</p>}
+              {item.run_id && <p>运行批次 <span className="block font-mono">{item.run_id}</span></p>}
+              {item.request_id && <p>请求 ID <span className="block font-mono">{item.request_id}</span></p>}
+            </div>
+          </article>
+        ))}
+        {response.items.length === 0 && <p className="p-12 text-center text-sm text-muted-foreground">没有符合条件的日志</p>}
       </div>
 
       <div className="flex items-center justify-between gap-4">
@@ -299,9 +286,9 @@ export function JobTimelineView({
           <p className="break-all font-mono text-sm">{response.job_id}</p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
-          <label className="text-xs font-medium text-muted-foreground">
+          <label className="min-w-0 max-w-full text-xs font-medium text-muted-foreground">
             运行批次
-            <select disabled={loading} value={selectedRunId} onChange={(event) => onRunChange(event.target.value)} className="focus-ring mt-1 block min-h-10 min-w-56 rounded-md border bg-background px-3 text-sm text-foreground">
+            <select disabled={loading} value={selectedRunId} onChange={(event) => onRunChange(event.target.value)} className="focus-ring mt-1 block min-h-10 w-full min-w-0 max-w-full rounded-md border bg-background px-3 text-sm text-foreground sm:min-w-56">
               <option value="">全部运行批次</option>
               {response.run_ids.map((runId) => <option key={runId} value={runId}>{runId}</option>)}
             </select>
@@ -317,12 +304,12 @@ export function JobTimelineView({
               <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-start">
                 <div>
                   <p className={`text-xs font-bold ${levelClass(item.level)}`}>{item.level} · {item.event}</p>
-                  <h2 className="mt-1 text-sm font-semibold">{item.message}</h2>
+                  <h2 className="mt-1 break-words text-sm font-semibold [overflow-wrap:anywhere]">{item.message}</h2>
                 </div>
                 <time className="whitespace-nowrap text-xs text-muted-foreground">{formatTime(item.created_at)}</time>
               </div>
               <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
-                <p><span className="text-muted-foreground">阶段：</span><span className="font-mono">{item.stage ?? "-"}</span></p>
+                <p title={item.stage ?? undefined}><span className="text-muted-foreground">阶段：</span>{adminStageLabel(item.stage)}</p>
                 <p><span className="text-muted-foreground">组件：</span>{item.component ?? "-"}</p>
                 <p><span className="text-muted-foreground">耗时：</span>{formatDuration(item.duration_ms)}</p>
                 <p className="break-all"><span className="text-muted-foreground">请求 ID：</span><span className="font-mono">{item.request_id ?? "-"}</span></p>
@@ -357,6 +344,8 @@ export default function AdminLogsPage() {
       const stored = sessionStorage.getItem(SESSION_TOKEN_KEY) ?? "";
       setToken(stored);
       setTokenInput(stored);
+      const jobId = new URLSearchParams(window.location.search).get("jobId")?.trim();
+      if (jobId) setTimelineJobId(jobId);
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
@@ -403,16 +392,22 @@ export default function AdminLogsPage() {
       setError(null);
     } catch (reason) {
       setError(reason instanceof AdminApiError ? reason.message : "任务时间线读取失败。");
+      if (reason instanceof AdminApiError && reason.status === 401) {
+        sessionStorage.removeItem(SESSION_TOKEN_KEY);
+        setToken("");
+        setResponse(null);
+        setTimelineResponse(null);
+      }
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || timelineJobId) return;
     const timer = window.setTimeout(() => void loadLogs(token, filters, page), 0);
     return () => window.clearTimeout(timer);
-  }, [filters, loadLogs, page, token]);
+  }, [filters, loadLogs, page, timelineJobId, token]);
 
   useEffect(() => {
     if (!timelineJobId || !token) return;
@@ -424,16 +419,16 @@ export default function AdminLogsPage() {
   }, [loadTimeline, timelineJobId, timelineRunId, token]);
 
   useEffect(() => {
-    if (!autoRefresh || !token) return;
-    const timer = window.setInterval(() => {
+    if (!autoRefresh || !token || loading) return;
+    const timer = window.setTimeout(() => {
       if (timelineJobId) {
         void loadTimeline(token, timelineJobId, timelineRunId);
       } else {
         void loadLogs(token, filters, page);
       }
     }, 10000);
-    return () => window.clearInterval(timer);
-  }, [autoRefresh, filters, loadLogs, loadTimeline, page, timelineJobId, timelineRunId, token]);
+    return () => window.clearTimeout(timer);
+  }, [autoRefresh, filters, loadLogs, loadTimeline, loading, page, timelineJobId, timelineRunId, token]);
 
   function connect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -471,9 +466,10 @@ export default function AdminLogsPage() {
   return (
     <main className="min-h-dvh pb-12">
       <header className="border-b bg-card">
-        <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-5 py-4 sm:px-8">
+        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center justify-between gap-4 px-5 py-4 sm:px-8">
           <div><p className="text-xs text-muted-foreground">NICOKARA CLOUD</p><h1 className="text-xl font-bold">管理员日志</h1></div>
           <div className="flex gap-2">
+            <ThemeToggle />
             <label className="flex min-h-10 items-center gap-2 rounded-md border px-3 text-xs font-medium"><input type="checkbox" checked={autoRefresh} onChange={(event) => setAutoRefresh(event.target.checked)} />定时刷新</label>
             <button type="button" title="立即刷新" aria-label="立即刷新" disabled={loading} onClick={() => timelineJobId ? void loadTimeline(token, timelineJobId, timelineRunId) : void loadLogs(token, filters, page)} className="focus-ring inline-flex size-10 items-center justify-center rounded-md border hover:bg-muted disabled:opacity-50"><RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} /></button>
             <button type="button" title="退出管理员日志" aria-label="退出管理员日志" onClick={logout} className="focus-ring inline-flex size-10 items-center justify-center rounded-md border hover:bg-muted"><LogOut className="size-4" /></button>
@@ -485,7 +481,8 @@ export default function AdminLogsPage() {
       </header>
       <div className="mx-auto max-w-[1500px] px-5 pt-6 sm:px-8">
         {error && <div role="alert" className="mb-5 border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>}
-        {timelineJobId && timelineResponse ? (
+        {timelineJobId ? (
+          timelineResponse ? (
           <JobTimelineView
             response={timelineResponse}
             selectedRunId={timelineRunId}
@@ -495,8 +492,10 @@ export default function AdminLogsPage() {
               setTimelineJobId("");
               setTimelineRunId("");
               setTimelineResponse(null);
+              window.history.replaceState(null, "", window.location.pathname);
             }}
           />
+        ) : <div className="py-12 text-sm text-muted-foreground"><button type="button" onClick={() => { setTimelineJobId(""); window.history.replaceState(null, "", window.location.pathname); }} className="focus-ring mb-4 inline-flex min-h-10 items-center gap-2 text-primary"><ArrowLeft className="size-4" />返回日志列表</button><p>{loading ? "读取任务时间线" : "时间线暂不可用，请刷新重试。"}</p></div>
         ) : response ? (
           <AdminLogsView
             response={response}

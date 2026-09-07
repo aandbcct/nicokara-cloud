@@ -42,6 +42,7 @@ from app.schemas.jobs import (
 from app.services.chunked_uploads import (
     acquire_completion_lock,
     assemble_chunked_audio,
+    assemble_chunked_mp4,
     missing_chunk_indices,
     read_chunked_upload_metadata,
     received_chunk_indices,
@@ -51,6 +52,7 @@ from app.services.chunked_uploads import (
     touch_chunked_upload,
 )
 from app.services.uploads import save_audio, save_lyrics, save_mp4
+from app.services.review_drafts import timeline_source_revision
 from app.services.reviewed_artifacts import (
     ensure_lyrics_source_from_reviewed_artifacts,
     save_reviewed_artifacts,
@@ -115,41 +117,46 @@ def create_or_resume_audio_upload(
         raise HTTPException(status_code=400, detail="音频分片大小必须为 8 MiB")
 
     ticket_id = submission_id
-    try:
-        metadata = read_chunked_upload_metadata(settings.storage_dir, ticket_id)
-    except HTTPException as exc:
-        if exc.status_code != status.HTTP_404_NOT_FOUND:
-            raise
-        metadata = start_chunked_upload(
-            settings.storage_dir,
-            ticket_id,
-            video_name=audio_name,
-            video_size_bytes=payload.audio_size_bytes,
-            chunk_size_bytes=payload.chunk_size_bytes,
-            total_chunks=payload.total_chunks,
-            extra_metadata={
+    with database.locked_upload_admission() as connection:
+        try:
+            metadata = read_chunked_upload_metadata(settings.storage_dir, ticket_id)
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_404_NOT_FOUND:
+                raise
+            client_key = client_key_from_request(request, settings)
+            database.resource_policy.check_upload_capacity(
+                connection, size_bytes=payload.audio_size_bytes, client_key=client_key,
+            )
+            metadata = start_chunked_upload(
+                settings.storage_dir,
+                ticket_id,
+                video_name=audio_name,
+                video_size_bytes=payload.audio_size_bytes,
+                chunk_size_bytes=payload.chunk_size_bytes,
+                total_chunks=payload.total_chunks,
+                extra_metadata={
+                    "upload_kind": "audio",
+                    "original_video_name": original_video_name,
+                    "original_video_size_bytes": payload.original_video_size_bytes,
+                    "client_key": client_key,
+                    "client_submission_id": submission_id,
+                },
+            )
+        else:
+            response.status_code = status.HTTP_200_OK
+            expected = {
                 "upload_kind": "audio",
+                "video_name": audio_name,
+                "video_size_bytes": payload.audio_size_bytes,
+                "chunk_size_bytes": payload.chunk_size_bytes,
+                "total_chunks": payload.total_chunks,
                 "original_video_name": original_video_name,
                 "original_video_size_bytes": payload.original_video_size_bytes,
-                "client_key": client_key_from_request(request, settings),
                 "client_submission_id": submission_id,
-            },
-        )
-    else:
-        response.status_code = status.HTTP_200_OK
-        expected = {
-            "upload_kind": "audio",
-            "video_name": audio_name,
-            "video_size_bytes": payload.audio_size_bytes,
-            "chunk_size_bytes": payload.chunk_size_bytes,
-            "total_chunks": payload.total_chunks,
-            "original_video_name": original_video_name,
-            "original_video_size_bytes": payload.original_video_size_bytes,
-            "client_submission_id": submission_id,
-        }
-        if any(metadata.get(key) != value for key, value in expected.items()):
-            raise HTTPException(status_code=409, detail="Audio upload session metadata does not match.")
-        touch_chunked_upload(settings.storage_dir, ticket_id)
+            }
+            if any(metadata.get(key) != value for key, value in expected.items()):
+                raise HTTPException(status_code=409, detail="Audio upload session metadata does not match.")
+            touch_chunked_upload(settings.storage_dir, ticket_id)
     event_logger = request_event_logger(request)
     if event_logger is not None:
         event_logger.emit(
@@ -567,25 +574,44 @@ async def create_audio_only_job(
 async def queue_audio_job_for_cloud_render(
     job_id: str,
     request: Request,
-    video: UploadFile = File(...),
+    video: UploadFile | None = File(default=None),
     timeline_review: str = Form(...),
+    upload_ticket_id: str | None = Form(default=None),
 ) -> JobResponse:
+    async def close_video():
+        if video is not None:
+            await video.close()
+
     settings, database = services(request)
     job = database.get_job(job_id)
     if job is None:
-        await video.close()
+        await close_video()
         raise HTTPException(status_code=404, detail="任务不存在或已经过期")
+    if (video is None) == (upload_ticket_id is None):
+        await close_video()
+        raise HTTPException(status_code=422, detail="请提供视频或已完成上传的分片会话")
+    ticket = None
+    if upload_ticket_id is not None:
+        upload_ticket_id = normalized_client_submission_id(upload_ticket_id)
+        ticket = database.get_upload_ticket(upload_ticket_id)
+        if ticket is None:
+            raise HTTPException(status_code=404, detail="上传会话不存在或已过期")
+        if ticket["status"] == "COMPLETED" and ticket.get("job_id") == job_id:
+            return job_response(database, job)
+        if ticket["status"] != "UPLOADING":
+            raise HTTPException(status_code=409, detail="上传会话状态已变化")
     if (
         job.get("input_mode") != "AUDIO_ONLY"
         or job["status"] not in {"ALIGNED", "SUBTITLE_GENERATED", "COMPLETED"}
     ):
-        await video.close()
+        await close_video()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="当前任务不能进入云端仅渲染队列",
         )
-    if safe_display_name(video.filename) != job["original_video_name"]:
-        await video.close()
+    video_name = ticket["video_name"] if ticket else safe_display_name(video.filename)
+    if video_name != job["original_video_name"]:
+        await close_video()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="选择的视频文件名与音频任务的原视频不一致",
@@ -593,22 +619,24 @@ async def queue_audio_job_for_cloud_render(
 
     timeline_path_value = job.get("timeline_path")
     if not timeline_path_value or not Path(timeline_path_value).is_file():
-        await video.close()
+        await close_video()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="任务时间轴尚未生成，不能开始云端渲染",
         )
     try:
         review_data = json.loads(timeline_review)
-        source_data = json.loads(
-            Path(timeline_path_value).read_text(encoding="utf-8")
-        )
+        source_content = Path(timeline_path_value).read_bytes()
+        source_data = json.loads(source_content)
+        if isinstance(review_data, dict) and review_data.get("source_revision") != timeline_source_revision(job, source_content):
+            await close_video()
+            raise HTTPException(status_code=409, detail="时间轴已变化，请刷新页面后重新提交。")
         reviewed_timeline = apply_timeline_review(
             lyric_timeline_from_dict(source_data),
             review_data,
         )
     except (json.JSONDecodeError, TimelineReviewError) as exc:
-        await video.close()
+        await close_video()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"时间轴校正数据无效：{exc}",
@@ -617,13 +645,22 @@ async def queue_audio_job_for_cloud_render(
     client_key = client_key_from_request(request, settings)
     reservation = None
     temp_dir = settings.storage_dir / job_id / f".cloud-render-{uuid4()}"
+    render_id = uuid4().hex
+    promoted_paths: list[Path] = []
+    queued = False
+    completion_lock = None
     try:
         reservation = request.app.state.active_job_limiter.reserve(client_key)
-        saved = await save_mp4(
-            video,
-            temp_dir / "input.mp4",
-            max_bytes=settings.max_video_bytes,
-        )
+        if upload_ticket_id is not None:
+            completion_lock = acquire_completion_lock(settings.storage_dir, upload_ticket_id)
+            saved = assemble_chunked_mp4(
+                settings.storage_dir, upload_ticket_id, temp_dir / "input.mp4",
+                max_bytes=settings.max_video_bytes,
+            )
+        else:
+            saved = await save_mp4(
+                video, temp_dir / "input.mp4", max_bytes=settings.max_video_bytes,
+            )
         if saved.size_bytes != job["video_size_bytes"]:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -651,9 +688,11 @@ async def queue_audio_job_for_cloud_render(
         )
 
         job_dir = settings.storage_dir / job_id
-        final_video_path = job_dir / "input.mp4"
-        final_timeline_path = job_dir / "timeline.json"
-        final_ass_path = job_dir / "kirakara.ass"
+        # Only the winning database update publishes these immutable inputs.
+        final_video_path = job_dir / f"cloud-{render_id}.mp4"
+        final_timeline_path = job_dir / f"cloud-{render_id}.json"
+        final_ass_path = job_dir / f"cloud-{render_id}.ass"
+        promoted_paths = [final_video_path, final_timeline_path, final_ass_path]
         saved.path.replace(final_video_path)
         reviewed_path.replace(final_timeline_path)
         ass_path.replace(final_ass_path)
@@ -664,6 +703,8 @@ async def queue_audio_job_for_cloud_render(
             video_sha256=saved.sha256,
             timeline_path=final_timeline_path,
             ass_path=final_ass_path,
+            expected_updated_at=job["updated_at"],
+            upload_ticket_id=upload_ticket_id,
         )
         if not queued:
             raise HTTPException(
@@ -674,7 +715,7 @@ async def queue_audio_job_for_cloud_render(
         reservation = None
         await enqueue_created_job(request, job_id)
     except ActiveJobLimitError as exc:
-        await video.close()
+        await close_video()
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="当前客户端已有任务正在处理，请稍后再试",
@@ -684,6 +725,13 @@ async def queue_audio_job_for_cloud_render(
         if reservation is not None:
             reservation.release()
         shutil.rmtree(temp_dir, ignore_errors=True)
+        if not queued:
+            for path in promoted_paths:
+                path.unlink(missing_ok=True)
+        if completion_lock is not None:
+            completion_lock.unlink(missing_ok=True)
+        if queued and upload_ticket_id is not None:
+            remove_chunked_upload(settings.storage_dir, upload_ticket_id)
 
     updated = database.get_job(job_id)
     if updated is None:

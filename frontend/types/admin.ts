@@ -30,6 +30,8 @@ export type AdminRunner = {
   worker_count: number | null;
   alive_workers: number | null;
   queued_in_memory: number | null;
+  queue_capacity?: number;
+  accepting_jobs?: boolean;
   last_heartbeat_at: string | null;
   active_jobs: Array<{
     worker_index: number;
@@ -99,6 +101,33 @@ export type AdminOverview = {
 export type AdminAction = {
   id: string;
   status: string;
+};
+
+export type AdminTrafficSeriesPoint = {
+  key: string;
+  label: string;
+  started_at: string;
+  ended_at: string;
+  pageviews: number;
+  visits: number;
+  source: string;
+  editable: boolean;
+};
+
+export type AdminTrafficReport = {
+  date_from: string;
+  date_to: string;
+  pageviews: number;
+  visits: number;
+  pages_per_visit: number;
+  has_partial_pdf_period: boolean;
+  manual_entry_min_date: string;
+  series: AdminTrafficSeriesPoint[];
+};
+
+export type AdminDailyTrafficInput = {
+  pageviews: number;
+  visits: number;
 };
 
 export type AdminLogItem = {

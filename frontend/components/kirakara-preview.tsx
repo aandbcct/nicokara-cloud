@@ -42,12 +42,17 @@ import {
   saveTimelineReviewDraft,
 } from "@/services/api";
 import type { Job } from "@/types/job";
+import {
+  createTimelineHistory, recordTimelineEdit, undoTimelineEdit, redoTimelineEdit,
+  loopPlaybackTime, type PlaybackRange, type TimelineHistory,
+} from "@/lib/timeline-editing";
 
 const TIMELINE_AUTOSAVE_DELAY_MS = 600;
 
 type TimelineSaveState = {
   phase: "idle" | "pending" | "saving" | "saved" | "restored" | "error";
   message?: string;
+  refreshRequired?: boolean;
 };
 
 type PreviewFrameLoopOptions = {
@@ -113,9 +118,15 @@ export function KirakaraPreview({
   const autosaveVersion = useRef(0);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const timelineDraftJobId = useRef<string | null>(null);
+  const savedAtRef = useRef<string | null>(null);
+  const [cloudSavedAt, setCloudSavedAt] = useState<string | null>(null);
   const [video, setVideo] = useState<File | null>(() => getLocalVideo(jobId));
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<KirakaraTimeline | null>(null);
+  const history = useRef<TimelineHistory | null>(null);
+  const [historyAvailability, setHistoryAvailability] = useState({ canUndo: false, canRedo: false });
+  const loopRange = useRef<PlaybackRange | null>(null);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [frame, setFrame] = useState<KirakaraFrame | null>(null);
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [autosaveTrigger, setAutosaveTrigger] = useState<{
@@ -150,6 +161,9 @@ export function KirakaraPreview({
     activeJobId.current = jobId;
     autosaveVersion.current = 0;
     timelineDraftJobId.current = null;
+    savedAtRef.current = null;
+    history.current = null;
+    loopRange.current = null;
   }, [jobId]);
 
   useEffect(() => {
@@ -170,16 +184,23 @@ export function KirakaraPreview({
       }
 
       const cloudDraft = cloudDraftResult.status === "fulfilled"
-        ? cloudDraftResult.value
-        : null;
+        && cloudDraftResult.value?.timeline.source_revision === sourceResult.value.source_revision
+        ? cloudDraftResult.value : null;
+      const savedAt = cloudDraft?.saved_at ?? null;
+      savedAtRef.current = savedAt;
+      setCloudSavedAt(savedAt);
       const cloudOrSource = toKirakaraTimeline(
         cloudDraft?.timeline ?? sourceResult.value,
       );
       const browserDraft = browserDraftResult.status === "fulfilled"
-        ? compatibleTimelineDraft(cloudOrSource, browserDraftResult.value)
+        && cloudDraftResult.status === "fulfilled"
+        ? compatibleTimelineDraft(cloudOrSource, browserDraftResult.value, savedAt)
         : null;
       timelineDraftJobId.current = jobId;
-      setTimeline(browserDraft ?? cloudOrSource);
+      const restoredTimeline = browserDraft ?? cloudOrSource;
+      history.current = createTimelineHistory(restoredTimeline);
+      setHistoryAvailability({ canUndo: false, canRedo: false });
+      setTimeline(restoredTimeline);
       setTimelineError(null);
       if (browserDraft) {
         setTimelineSaveState({
@@ -208,12 +229,12 @@ export function KirakaraPreview({
   }, [jobId]);
 
   useEffect(() => {
-    if (timelineDraftJobId.current !== jobId || !timeline) return;
+    if (timelineDraftJobId.current !== jobId || !timeline || autosaveTrigger?.jobId !== jobId) return;
     const timer = setTimeout(() => {
-      void saveBrowserReviewDraft(jobId, "timeline", timeline);
+      void saveBrowserReviewDraft(jobId, "timeline", { ...timeline, baseSavedAt: cloudSavedAt });
     }, 300);
     return () => clearTimeout(timer);
-  }, [jobId, timeline]);
+  }, [autosaveTrigger, cloudSavedAt, jobId, timeline]);
 
   useEffect(() => {
     if (!timeline || !autosaveTrigger || autosaveTrigger.jobId !== jobId) return;
@@ -240,6 +261,7 @@ export function KirakaraPreview({
       }
 
       const operation = saveQueue.current.then(async () => {
+        if (!componentActive.current || activeJobId.current !== targetJobId) return null;
         if (
           componentActive.current
           && activeJobId.current === targetJobId
@@ -247,16 +269,23 @@ export function KirakaraPreview({
         ) {
           setTimelineSaveState({ phase: "saving" });
         }
-        return saveTimelineReviewDraft(targetJobId, review);
+        const saved = await saveTimelineReviewDraft(targetJobId, {
+          ...review, base_saved_at: savedAtRef.current,
+        });
+        if (componentActive.current && activeJobId.current === targetJobId) {
+          savedAtRef.current = saved.saved_at;
+          setCloudSavedAt(saved.saved_at);
+        }
+        return saved;
       });
       saveQueue.current = operation.then(
         () => undefined,
         () => undefined,
       );
       void operation.then(
-        () => {
+        (saved) => {
           if (
-            componentActive.current
+            saved && componentActive.current
             && activeJobId.current === targetJobId
             && autosaveVersion.current === version
           ) {
@@ -271,8 +300,11 @@ export function KirakaraPreview({
           ) {
             setTimelineSaveState({
               phase: "error",
+              refreshRequired: reason instanceof ApiRequestError && reason.status === 409,
               message: reason instanceof ApiRequestError
-                ? reason.feedback.title
+                ? reason.status === 409
+                  ? "草稿或时间轴已更新，请刷新页面后继续。"
+                  : reason.feedback.title
                 : "时间轴自动保存失败",
             });
           }
@@ -309,6 +341,8 @@ export function KirakaraPreview({
   const updateFrame = useCallback(() => {
     const videoElement = videoRef.current;
     if (!videoElement) return;
+    const loopTime = loopPlaybackTime(loopRange.current, videoElement.currentTime, videoElement.duration, !videoElement.paused);
+    if (loopTime !== null) videoElement.currentTime = loopTime;
     setFrame(
       timeline
         ? activeKirakaraFrame(timeline, videoElement.currentTime * 1000)
@@ -329,12 +363,42 @@ export function KirakaraPreview({
     saveKirakaraStyle(window.localStorage, nextStyle);
   }
 
-  function updateTimeline(nextTimeline: KirakaraTimeline) {
+  function saveTimelineChange(nextTimeline: KirakaraTimeline) {
+    setHistoryAvailability({ canUndo: Boolean(history.current?.past.length), canRedo: Boolean(history.current?.future.length) });
     const version = autosaveVersion.current + 1;
     autosaveVersion.current = version;
     setTimeline(nextTimeline);
     setAutosaveTrigger({ jobId, version });
     setTimelineSaveState({ phase: "pending" });
+  }
+
+  function updateTimeline(nextTimeline: KirakaraTimeline, group?: string) {
+    if (!history.current) history.current = createTimelineHistory(nextTimeline);
+    else history.current = recordTimelineEdit(history.current, nextTimeline, group);
+    saveTimelineChange(nextTimeline);
+  }
+
+  function navigateHistory(direction: "undo" | "redo") {
+    if (!history.current) return;
+    history.current = direction === "undo" ? undoTimelineEdit(history.current) : redoTimelineEdit(history.current);
+    saveTimelineChange(history.current.present);
+  }
+
+  const loopLine = useCallback((range: PlaybackRange | null) => {
+    loopRange.current = range;
+    setPlaybackError(null);
+    const element = videoRef.current;
+    if (!range || !element) return;
+    if (Number.isFinite(element.duration) && range.startMs >= element.duration * 1000) {
+      setPlaybackError("当前句超出视频时长");
+      return;
+    }
+    element.currentTime = range.startMs / 1000;
+    void element.play().catch(() => setPlaybackError("试听未能开始，请在视频上点击播放。"));
+  }, []);
+
+  function continueLoop() {
+    if (loopRange.current) loopLine(loopRange.current);
   }
 
   function retryTimelineSave() {
@@ -426,6 +490,7 @@ export function KirakaraPreview({
                   onTimeUpdate={updateFrame}
                   onSeeked={updateFrame}
                   onPlay={startDrawing}
+                  onEnded={continueLoop}
                   onPause={() => {
                     stopDrawing();
                     updateFrame();
@@ -494,19 +559,27 @@ export function KirakaraPreview({
                   {timelineSaveState.phase === "error" && (
                     <button
                       type="button"
-                      onClick={retryTimelineSave}
+                      onClick={timelineSaveState.refreshRequired
+                        ? () => window.location.reload() : retryTimelineSave}
                       className="focus-ring inline-flex items-center gap-1 rounded-sm font-medium text-foreground underline-offset-4 hover:underline"
                     >
                       <RefreshCw className="size-3.5" />
-                      重试保存
+                      {timelineSaveState.refreshRequired ? "刷新页面" : "重试保存"}
                     </button>
                   )}
                 </div>
                 <KirakaraReviewEditor
+                  key={jobId}
                   timeline={timeline}
                   onChange={updateTimeline}
                   onSeek={seekPreview}
+                  canUndo={historyAvailability.canUndo}
+                  canRedo={historyAvailability.canRedo}
+                  onUndo={() => navigateHistory("undo")}
+                  onRedo={() => navigateHistory("redo")}
+                  onLoop={loopLine}
                 />
+                {playbackError && <p role="alert" className="mt-2 text-sm text-destructive">{playbackError}</p>}
               </>
             )}
           </div>

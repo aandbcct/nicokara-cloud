@@ -2,6 +2,7 @@ import { FileUp, Zap, Download } from "lucide-react";
 
 import { UploadForm } from "@/components/upload-form";
 import { AnnouncementButton } from "@/components/announcement-button";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { HOME_COPY } from "@/lib/ui-copy";
 
 const steps = [
@@ -24,11 +25,14 @@ export default function Home() {
     <main className="min-h-dvh">
       <section className="mx-auto grid min-h-dvh max-w-6xl gap-12 px-5 py-8 sm:px-8 lg:grid-cols-[0.9fr_1.1fr] lg:py-10">
         <div className="self-center lg:sticky lg:top-10">
-          <h1 className="font-display text-4xl font-bold leading-tight tracking-tight sm:text-6xl">
+          <div className="flex items-start justify-between gap-3">
+          <h1 className="font-display text-4xl font-bold leading-tight tracking-normal sm:text-6xl">
             ニコカラ
             <br />
             自动生成器
           </h1>
+          <ThemeToggle />
+          </div>
           <p className="mt-7 max-w-xl text-base leading-8 text-muted-foreground sm:text-lg">
             喜欢的歌太冷门，找不到ニコカラ版本？
             <br />

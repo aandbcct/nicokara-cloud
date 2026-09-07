@@ -19,6 +19,7 @@ const UPLOAD_RECOVERY_POLL_INTERVAL_MS = 3_000;
 const UNKNOWN_UPLOAD_RESULT_STATUSES = new Set([0, 524]);
 const UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024 * 1024;
 const UPLOAD_REQUEST_ATTEMPTS = 3;
+const UPLOAD_REQUEST_TIMEOUT_MS = 120_000;
 const INSTRUMENTAL_DOWNLOAD_ATTEMPTS = 3;
 
 export type CreateJobInput = {
@@ -55,6 +56,8 @@ type UploadChunkSession = {
   chunk_size_bytes: number;
   total_chunks: number;
   received_chunks: number;
+  received_chunk_indices?: number[];
+  missing_chunk_indices?: number[];
 };
 
 type AudioUploadChunkSession = UploadChunkSession & {
@@ -67,7 +70,7 @@ const AUDIO_UPLOAD_STORAGE_PREFIX = "nicokara:audio-upload:";
 export class ApiRequestError extends Error {
   readonly feedback: ErrorFeedback;
 
-  constructor(feedback: ErrorFeedback) {
+  constructor(feedback: ErrorFeedback, readonly status?: number) {
     super(`${feedback.title}：${feedback.description}`);
     this.name = "ApiRequestError";
     this.feedback = feedback;
@@ -121,6 +124,7 @@ function xhrRequestError(
       responseDetail(xhr),
       retryAfterSeconds(xhr.getResponseHeader("Retry-After")),
     ),
+    xhr.status,
   );
 }
 
@@ -169,9 +173,70 @@ function unknownUploadRecoveryError(
   });
 }
 
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    globalThis.setTimeout(resolve, ms);
+function assertUploadActive(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new DOMException("上传已暂停", "AbortError");
+}
+
+function wait(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    assertUploadActive(signal);
+    const finish = () => { signal?.removeEventListener("abort", abort); resolve(); };
+    const timer = globalThis.setTimeout(finish, ms);
+    const abort = () => {
+      globalThis.clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(new DOMException("上传已暂停", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function uploadFetch(url: string, options: RequestInit, signal?: AbortSignal): Promise<Response> {
+  assertUploadActive(signal);
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const timer = globalThis.setTimeout(abort, UPLOAD_REQUEST_TIMEOUT_MS);
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const body = await response.text();
+    assertUploadActive(signal);
+    return new Response(body || null, {
+      status: response.status, statusText: response.statusText, headers: response.headers,
+    });
+  } catch {
+    assertUploadActive(signal);
+    throw connectionError("upload");
+  } finally {
+    globalThis.clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
+function uploadForm(url: string, data: FormData, onProgress: (bytes: number) => void, signal?: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
+    assertUploadActive(signal);
+    const xhr = new XMLHttpRequest();
+    const abort = () => xhr.abort();
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    xhr.open("POST", url);
+    xhr.timeout = UPLOAD_REQUEST_TIMEOUT_MS;
+    xhr.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) onProgress(event.loaded);
+    });
+    xhr.addEventListener("load", () => {
+      cleanup();
+      if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.responseText);
+      else reject(xhrRequestError(xhr));
+    });
+    for (const event of ["error", "timeout", "abort"]) {
+      xhr.addEventListener(event, () => {
+        cleanup();
+        reject(signal?.aborted ? new DOMException("上传已暂停", "AbortError") : connectionError("upload"));
+      });
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+    xhr.send(data);
   });
 }
 
@@ -187,6 +252,7 @@ async function checkedJson<T>(
         await fetchResponseDetail(response),
         retryAfterSeconds(response.headers.get("Retry-After")),
       ),
+      response.status,
     );
   }
   return (await response.json()) as T;
@@ -194,10 +260,11 @@ async function checkedJson<T>(
 
 export async function createUploadTicket(
   input: CreateUploadTicketInput,
+  signal?: AbortSignal,
 ): Promise<UploadTicket> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}/upload-tickets`, {
+    response = await uploadFetch(`${API_BASE}/upload-tickets`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       cache: "no-store",
@@ -206,8 +273,9 @@ export async function createUploadTicket(
         video_size_bytes: input.videoSizeBytes,
         client_submission_id: input.clientSubmissionId,
       }),
-    });
+    }, signal);
   } catch {
+    assertUploadActive(signal);
     throw connectionError("upload");
   }
   return checkedJson<UploadTicket>(response, "upload");
@@ -215,16 +283,19 @@ export async function createUploadTicket(
 
 export async function getJobByClientSubmissionId(
   clientSubmissionId: string,
+  signal?: AbortSignal,
 ): Promise<Job> {
   let response: Response;
   try {
-    response = await fetch(
+    response = await uploadFetch(
       `${API_BASE}/jobs/by-submission/${clientSubmissionId}`,
       {
         cache: "no-store",
       },
+      signal,
     );
   } catch {
+    assertUploadActive(signal);
     throw connectionError("job");
   }
   return checkedJson<Job>(response, "job");
@@ -232,23 +303,27 @@ export async function getJobByClientSubmissionId(
 
 async function getJobByClientSubmissionIdOrNull(
   clientSubmissionId: string,
+  signal?: AbortSignal,
 ): Promise<Job | null> {
   try {
-    return await getJobByClientSubmissionId(clientSubmissionId);
+    return await getJobByClientSubmissionId(clientSubmissionId, signal);
   } catch {
+    assertUploadActive(signal);
     return null;
   }
 }
 
 export async function getUploadTicket(
   ticketId: string,
+  signal?: AbortSignal,
 ): Promise<UploadTicket> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}/upload-tickets/${ticketId}`, {
+    response = await uploadFetch(`${API_BASE}/upload-tickets/${ticketId}`, {
       cache: "no-store",
-    });
+    }, signal);
   } catch {
+    assertUploadActive(signal);
     throw connectionError("upload");
   }
   return checkedJson<UploadTicket>(response, "upload");
@@ -272,6 +347,7 @@ export async function cancelUploadTicket(
 async function startChunkedUpload(
   ticketId: string,
   input: CreateJobInput,
+  signal?: AbortSignal,
 ): Promise<UploadChunkSession> {
   const totalChunks = Math.max(
     1,
@@ -279,7 +355,7 @@ async function startChunkedUpload(
   );
   let response: Response;
   try {
-    response = await fetch(
+    response = await uploadFetch(
       `${API_BASE}/upload-tickets/${ticketId}/chunks/start`,
       {
         method: "POST",
@@ -292,48 +368,25 @@ async function startChunkedUpload(
           total_chunks: totalChunks,
         }),
       },
+      signal,
     );
   } catch {
+    assertUploadActive(signal);
     throw connectionError("upload");
   }
   return checkedJson<UploadChunkSession>(response, "upload");
 }
 
-function uploadChunk(
+async function uploadChunk(
   ticketId: string,
   chunkIndex: number,
   chunk: Blob,
   onChunkProgress: (loadedBytes: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const data = new FormData();
-    data.append("chunk", chunk, `chunk-${chunkIndex}.part`);
-
-    const xhr = new XMLHttpRequest();
-    xhr.open(
-      "POST",
-      `${API_BASE}/upload-tickets/${ticketId}/chunks/part/${chunkIndex}`,
-    );
-    xhr.upload.addEventListener("progress", (event) => {
-      if (event.lengthComputable) {
-        onChunkProgress(event.loaded);
-      }
-    });
-    xhr.addEventListener("load", () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-      } else {
-        reject(xhrRequestError(xhr));
-      }
-    });
-    xhr.addEventListener("error", () => {
-      reject(connectionError("upload"));
-    });
-    xhr.addEventListener("abort", () => {
-      reject(connectionError("upload"));
-    });
-    xhr.send(data);
-  });
+  const data = new FormData();
+  data.append("chunk", chunk, `chunk-${chunkIndex}.part`);
+  await uploadForm(`${API_BASE}/upload-tickets/${ticketId}/chunks/part/${chunkIndex}`, data, onChunkProgress, signal);
 }
 
 function isRetryableUploadError(reason: unknown): boolean {
@@ -345,10 +398,11 @@ async function uploadChunkWithRetry(
   chunkIndex: number,
   chunk: Blob,
   onChunkProgress: (loadedBytes: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   for (let attempt = 1; attempt <= UPLOAD_REQUEST_ATTEMPTS; attempt += 1) {
     try {
-      await uploadChunk(ticketId, chunkIndex, chunk, onChunkProgress);
+      await uploadChunk(ticketId, chunkIndex, chunk, onChunkProgress, signal);
       return;
     } catch (reason) {
       if (
@@ -357,34 +411,77 @@ async function uploadChunkWithRetry(
       ) {
         throw reason;
       }
-      await wait(1000 * attempt);
+      await wait(1000 * attempt, signal);
     }
   }
+}
+
+async function uploadVideoParts(
+  input: CreateJobInput,
+  submission: { id: string; storageKey: string },
+  onProgress: (progress: number) => void,
+  onQueueUpdate?: (ticket: UploadTicket) => void,
+  signal?: AbortSignal,
+): Promise<UploadTicket> {
+    assertUploadActive(signal);
+    let ticket: UploadTicket | null = null;
+    const previousTicket = readUploadStorage(`${submission.storageKey}:ticket`);
+    if (previousTicket) {
+      try { ticket = await getUploadTicket(previousTicket, signal); }
+      catch (reason) {
+        if (!(reason instanceof ApiRequestError) || ![404, 410].includes(reason.status ?? 0)) throw reason;
+      }
+      if (ticket && ["EXPIRED", "CANCELED"].includes(ticket.status)) ticket = null;
+    }
+    ticket ??= await createUploadTicket({
+      videoName: input.video.name,
+      videoSizeBytes: input.video.size,
+      clientSubmissionId: submission.id,
+    }, signal);
+    writeUploadStorage(`${submission.storageKey}:ticket`, ticket.id);
+    onQueueUpdate?.(ticket);
+    while (ticket.status === "WAITING") {
+      await wait(3000, signal);
+      ticket = await getUploadTicket(ticket.id, signal);
+      onQueueUpdate?.(ticket);
+    }
+    if (ticket.status === "COMPLETED") return ticket;
+    if (ticket.status !== "READY" && ticket.status !== "UPLOADING") {
+      throw uploadTicketStateError(ticket);
+    }
+    const session = await startChunkedUpload(ticket.id, input, signal);
+    const chunkSize = session.chunk_size_bytes;
+    const received = new Set(session.received_chunk_indices ?? []);
+    const missing = session.missing_chunk_indices ?? Array.from({ length: session.total_chunks }, (_, i) => i).filter(i => !received.has(i));
+    let confirmedBytes = [...received].reduce((sum, i) => sum + Math.min(chunkSize, input.video.size - i * chunkSize), 0);
+    onProgress(Math.min(99, Math.round(confirmedBytes / input.video.size * 100)));
+    for (const index of missing) {
+      const chunk = input.video.slice(index * chunkSize, Math.min(input.video.size, (index + 1) * chunkSize));
+      await uploadChunkWithRetry(ticket.id, index, chunk, (loaded) => {
+        onProgress(Math.min(99, Math.round((confirmedBytes + Math.min(loaded, chunk.size)) / input.video.size * 100)));
+      }, signal);
+      confirmedBytes += chunk.size;
+      onProgress(Math.min(99, Math.round(confirmedBytes / input.video.size * 100)));
+    }
+    return ticket;
 }
 
 export async function createJob(
   input: CreateJobInput,
   onProgress: (progress: number) => void,
   onQueueUpdate?: (ticket: UploadTicket) => void,
+  signal?: AbortSignal,
 ): Promise<Job> {
-  const clientSubmissionId = createClientSubmissionId();
-
-  async function waitForUploadTurn(): Promise<UploadTicket> {
-    let ticket = await createUploadTicket({
-      videoName: input.video.name,
-      videoSizeBytes: input.video.size,
-      clientSubmissionId,
-    });
-    onQueueUpdate?.(ticket);
-    while (ticket.status === "WAITING") {
-      await wait(3000);
-      ticket = await getUploadTicket(ticket.id);
-      onQueueUpdate?.(ticket);
+  assertUploadActive(signal);
+  const submission = uploadSubmissionId(videoUploadStorageKey(input));
+  const clientSubmissionId = submission.id;
+  if (submission.resumed) {
+    const existing = await getJobByClientSubmissionIdOrNull(clientSubmissionId, signal);
+    if (existing) {
+      clearAudioUploadSubmission(submission.storageKey);
+      onProgress(100);
+      return existing;
     }
-    if (ticket.status !== "READY") {
-      throw uploadTicketStateError(ticket);
-    }
-    return ticket;
   }
 
   async function recoverJobAfterUnknownUploadResult(
@@ -394,6 +491,7 @@ export async function createJob(
     while (Date.now() <= deadline) {
       const recoveredJob = await getJobByClientSubmissionIdOrNull(
         clientSubmissionId,
+        signal,
       );
       if (recoveredJob) {
         return recoveredJob;
@@ -401,9 +499,10 @@ export async function createJob(
 
       let refreshedTicket: UploadTicket | null = null;
       try {
-        refreshedTicket = await getUploadTicket(ticket.id);
+        refreshedTicket = await getUploadTicket(ticket.id, signal);
         onQueueUpdate?.(refreshedTicket);
       } catch {
+        assertUploadActive(signal);
         refreshedTicket = null;
       }
 
@@ -418,7 +517,7 @@ export async function createJob(
         throw uploadTicketStateError(refreshedTicket);
       }
 
-      await wait(UPLOAD_RECOVERY_POLL_INTERVAL_MS);
+      await wait(UPLOAD_RECOVERY_POLL_INTERVAL_MS, signal);
     }
 
     throw unknownUploadRecoveryError(ticket, clientSubmissionId);
@@ -439,15 +538,17 @@ export async function createJob(
 
     let response: Response;
     try {
-      response = await fetch(
+      response = await uploadFetch(
         `${API_BASE}/upload-tickets/${ticket.id}/chunks/complete`,
         {
           method: "POST",
           cache: "no-store",
           body: data,
         },
+        signal,
       );
     } catch {
+      assertUploadActive(signal);
       return recoverJobAfterUnknownUploadResult(ticket);
     }
 
@@ -470,26 +571,13 @@ export async function createJob(
         detail,
         retryAfterSeconds(response.headers.get("Retry-After")),
       ),
+      response.status,
     );
   }
 
-  const ticket = await waitForUploadTurn();
-  const session = await startChunkedUpload(ticket.id, input);
-  const chunkSize = session.chunk_size_bytes;
-  for (let index = 0; index < session.total_chunks; index += 1) {
-    const start = index * chunkSize;
-    const end = Math.min(input.video.size, start + chunkSize);
-    const chunk = input.video.slice(start, end);
-    await uploadChunkWithRetry(ticket.id, index, chunk, (loadedBytes) => {
-      const uploadedBytes = Math.min(input.video.size, start + loadedBytes);
-      onProgress(
-        Math.min(99, Math.round((uploadedBytes / input.video.size) * 100)),
-      );
-    });
-    onProgress(Math.min(99, Math.round((end / input.video.size) * 100)));
-  }
-
+  const ticket = await uploadVideoParts(input, submission, onProgress, onQueueUpdate, signal);
   const job = await completeChunkedUpload(ticket);
+  clearAudioUploadSubmission(submission.storageKey);
   onProgress(100);
   return job;
 }
@@ -548,7 +636,7 @@ export async function createAudioOnlyJob(
     resumed,
   } = audioUploadSubmissionId(input);
   if (resumed) {
-    const existing = await getJobByClientSubmissionIdOrNull(submissionId);
+    const existing = await getJobByClientSubmissionIdOrNull(submissionId, signal);
     if (existing) {
       clearAudioUploadSubmission(storageKey);
       onProgress(100);
@@ -562,7 +650,7 @@ export async function createAudioOnlyJob(
   );
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}/browser/audio-uploads`, {
+    response = await uploadFetch(`${API_BASE}/browser/audio-uploads`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       cache: "no-store",
@@ -575,8 +663,7 @@ export async function createAudioOnlyJob(
         total_chunks: totalChunks,
         client_submission_id: submissionId,
       }),
-      signal,
-    });
+    }, signal);
   } catch {
     if (signal?.aborted) throw new DOMException("音频上传已取消", "AbortError");
     throw connectionError("upload");
@@ -587,7 +674,7 @@ export async function createAudioOnlyJob(
       response.status === 524 ||
       response.status >= 500)
   ) {
-    const recovered = await getJobByClientSubmissionIdOrNull(submissionId);
+    const recovered = await getJobByClientSubmissionIdOrNull(submissionId, signal);
     if (recovered) {
       clearAudioUploadSubmission(storageKey);
       onProgress(100);
@@ -606,44 +693,15 @@ export async function createAudioOnlyJob(
     Math.min(99, Math.round((confirmedBytes / input.audio.size) * 100)),
   );
 
-  const uploadAudioChunk = (
+  const uploadAudioChunk = async (
     index: number,
     chunk: Blob,
     onChunkProgress: (loadedBytes: number) => void,
-  ): Promise<void> =>
-    new Promise((resolve, reject) => {
+  ): Promise<void> => {
       const data = new FormData();
       data.append("chunk", chunk, `chunk-${index}.part`);
-      const xhr = new XMLHttpRequest();
-      const abortUpload = () => xhr.abort();
-      const cleanup = () => signal?.removeEventListener("abort", abortUpload);
-      xhr.open(
-        "POST",
-        `${API_BASE}/browser/audio-uploads/${session.ticket_id}/chunks/part/${index}`,
-      );
-      xhr.upload.addEventListener("progress", (event) => {
-        if (event.lengthComputable) onChunkProgress(event.loaded);
-      });
-      xhr.addEventListener("load", () => {
-        cleanup();
-        if (xhr.status >= 200 && xhr.status < 300) resolve();
-        else reject(xhrRequestError(xhr));
-      });
-      xhr.addEventListener("error", () => {
-        cleanup();
-        reject(connectionError("upload"));
-      });
-      xhr.addEventListener("abort", () => {
-        cleanup();
-        reject(
-          signal?.aborted
-            ? new DOMException("音频上传已取消", "AbortError")
-            : connectionError("upload"),
-        );
-      });
-      signal?.addEventListener("abort", abortUpload, { once: true });
-      xhr.send(data);
-    });
+      await uploadForm(`${API_BASE}/browser/audio-uploads/${session.ticket_id}/chunks/part/${index}`, data, onChunkProgress, signal);
+    };
 
   for (const index of session.missing_chunk_indices) {
     const start = index * chunkSize;
@@ -675,7 +733,7 @@ export async function createAudioOnlyJob(
         ) {
           throw reason;
         }
-        await wait(1000 * attempt);
+        await wait(1000 * attempt, signal);
       }
     }
   }
@@ -686,9 +744,10 @@ export async function createAudioOnlyJob(
   appendProjectFiles(form, input.projectFiles);
   if (input.vocalMode) form.append("vocal_mode", input.vocalMode);
   try {
-    response = await fetch(
+    response = await uploadFetch(
       `${API_BASE}/browser/audio-uploads/${session.ticket_id}/complete`,
-      { method: "POST", cache: "no-store", body: form, signal },
+      { method: "POST", cache: "no-store", body: form },
+      signal,
     );
   } catch {
     if (signal?.aborted) throw new DOMException("音频上传已取消", "AbortError");
@@ -844,32 +903,43 @@ function audioUploadStorageKey(input: CreateAudioOnlyJobInput): string {
   ].join(":")}`;
 }
 
+function videoUploadStorageKey(input: CreateJobInput, kind = "video"): string {
+  const describe = (file?: File) => file ? [file.name, file.size, file.lastModified] : null;
+  return `nicokara:${kind}-upload:${JSON.stringify([
+    describe(input.video), input.lyricsText?.trim() ?? "", describe(input.lyricsFile),
+    input.projectFiles?.map(describe) ?? [], input.vocalMode ?? "on",
+  ])}`;
+}
+
+function readUploadStorage(key: string): string | null {
+  try { return globalThis.localStorage?.getItem(key) ?? null; }
+  catch { return null; }
+}
+
+function writeUploadStorage(key: string, value: string): void {
+  try { globalThis.localStorage?.setItem(key, value); }
+  catch { /* Uploading remains available when browser storage is full. */ }
+}
+
 function audioUploadSubmissionId(input: CreateAudioOnlyJobInput): {
   id: string;
   storageKey: string;
   resumed: boolean;
 } {
-  const storageKey = audioUploadStorageKey(input);
-  let stored: string | null = null;
-  try {
-    stored = globalThis.localStorage?.getItem(storageKey) ?? null;
-  } catch {
-    stored = null;
-  }
+  return uploadSubmissionId(audioUploadStorageKey(input));
+}
+
+function uploadSubmissionId(storageKey: string): { id: string; storageKey: string; resumed: boolean } {
+  const stored = readUploadStorage(storageKey);
   const id = stored || createClientSubmissionId();
-  if (!stored) {
-    try {
-      globalThis.localStorage?.setItem(storageKey, id);
-    } catch {
-      // The current upload still works when persistent storage is blocked.
-    }
-  }
+  if (!stored) writeUploadStorage(storageKey, id);
   return { id, storageKey, resumed: Boolean(stored) };
 }
 
 function clearAudioUploadSubmission(storageKey: string): void {
   try {
     globalThis.localStorage?.removeItem(storageKey);
+    globalThis.localStorage?.removeItem(`${storageKey}:ticket`);
   } catch {
     // A completed task does not depend on clearing browser storage.
   }
@@ -881,13 +951,13 @@ async function recoverAudioJobAfterUnknownCompletion(
 ): Promise<Job | null> {
   const deadline = Date.now() + UPLOAD_RECOVERY_TIMEOUT_MS;
   while (true) {
-    const recovered = await getJobByClientSubmissionIdOrNull(clientSubmissionId);
+    const recovered = await getJobByClientSubmissionIdOrNull(clientSubmissionId, signal);
     if (recovered) return recovered;
     if (signal?.aborted) {
       throw new DOMException("音频上传已取消", "AbortError");
     }
     if (Date.now() >= deadline) return null;
-    await wait(UPLOAD_RECOVERY_POLL_INTERVAL_MS);
+    await wait(UPLOAD_RECOVERY_POLL_INTERVAL_MS, signal);
   }
 }
 
@@ -1028,54 +1098,40 @@ export async function getInstrumentalAudio(
   throw connectionError("job");
 }
 
-export function submitCloudRender(
+export async function submitCloudRender(
   jobId: string,
   video: File,
   review: TimelineReviewPayload,
   onProgress: (progress: number) => void,
+  signal?: AbortSignal,
+  onQueueUpdate?: (ticket: UploadTicket) => void,
 ): Promise<Job> {
-  return new Promise((resolve, reject) => {
-    const data = new FormData();
-    data.append("video", video);
-    data.append("timeline_review", JSON.stringify(review));
-
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${API_BASE}/browser/jobs/${jobId}/cloud-render`);
-    xhr.upload.addEventListener("progress", (event) => {
-      if (event.lengthComputable) {
-        onProgress(Math.round(event.loaded / event.total * 100));
-      }
-    });
-    xhr.addEventListener("load", async () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        onProgress(100);
-        resolve(JSON.parse(xhr.responseText) as Job);
-        return;
-      }
-
-      if (xhr.status === 409) {
-        try {
-          const current = await getJob(jobId);
-          if (
-            current.stage === "CLOUD_RENDER_QUEUED" ||
-            current.stage === "RENDERING_VIDEO" ||
-            current.status === "COMPLETED"
-          ) {
-            onProgress(100);
-            resolve(current);
-            return;
-          }
-        } catch {
-          // Preserve the original submission response below.
-        }
-      }
-
-      reject(xhrRequestError(xhr, "cloud_render"));
-    });
-    xhr.addEventListener("error", () => reject(connectionError("upload")));
-    xhr.addEventListener("abort", () => reject(connectionError("upload")));
-    xhr.send(data);
-  });
+  assertUploadActive(signal);
+  const submission = uploadSubmissionId(videoUploadStorageKey({ video, lyricsText: JSON.stringify(review) }, `cloud-${jobId}`));
+  const ticket = await uploadVideoParts({ video }, submission, onProgress, onQueueUpdate, signal);
+  const data = new FormData();
+  data.append("upload_ticket_id", ticket.id);
+  data.append("timeline_review", JSON.stringify(review));
+  const deadline = Date.now() + UPLOAD_RECOVERY_TIMEOUT_MS;
+  while (true) {
+    try {
+      const response = await uploadFetch(`${API_BASE}/browser/jobs/${jobId}/cloud-render`, {
+        method: "POST", body: data, cache: "no-store",
+      }, signal);
+      const job = await checkedJson<Job>(response, "cloud_render");
+      clearAudioUploadSubmission(submission.storageKey);
+      onProgress(100);
+      return job;
+    } catch (reason) {
+      assertUploadActive(signal);
+      // Repeating this ticket only acknowledges its own accepted render request.
+      if (!(reason instanceof ApiRequestError) ||
+        (reason.status !== undefined && reason.status < 500) ||
+        !reason.feedback.retryable ||
+        Date.now() >= deadline) throw reason;
+      await wait(UPLOAD_RECOVERY_POLL_INTERVAL_MS, signal);
+    }
+  }
 }
 
 export async function cancelJob(jobId: string): Promise<Job> {

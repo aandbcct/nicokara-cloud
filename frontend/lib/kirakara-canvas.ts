@@ -97,7 +97,7 @@ function splitUnit(unit: KirakaraFrameUnit) {
   );
   const groups: Array<{
     characters: KirakaraFrameCharacter[];
-    ruby: KirakaraRuby | null;
+    ruby: KirakaraFrameRuby | null;
   }> = [];
   let cursor = 0;
   for (const annotation of sorted) {

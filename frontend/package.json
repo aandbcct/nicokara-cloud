@@ -8,9 +8,10 @@
   },
   "scripts": {
     "dev": "vinext dev",
-    "build": "vinext build",
+    "build": "npm run typecheck && vinext build",
     "start": "vinext start",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit --incremental false",
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {

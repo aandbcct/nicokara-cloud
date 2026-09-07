@@ -5,9 +5,11 @@ import json
 import logging
 import sqlite3
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
+from app.core.processing_control import check_interrupted
+from app.core.resource_limits import ResourcePolicy
 
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     input_mode TEXT NOT NULL DEFAULT 'VIDEO',
     source_upload_size_bytes INTEGER,
     source_upload_sha256 TEXT,
+    resume_stage TEXT,
+    render_vocal_mode TEXT,
+    review_generation INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -106,6 +111,13 @@ CREATE TABLE IF NOT EXISTS analytics_imports (
     imported_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS analytics_daily_overrides (
+    day TEXT PRIMARY KEY,
+    pageviews INTEGER NOT NULL CHECK(pageviews >= 0),
+    visits INTEGER NOT NULL CHECK(visits >= 0 AND visits <= pageviews),
+    updated_at TEXT NOT NULL
+);
+
 """
 
 
@@ -121,11 +133,11 @@ ANALYTICS_IMPORTS = (
     ),
     (
         "cloudflare-2026-09-partial",
-        "2026 年 9 月 1-4 日",
+        "2026 年 9 月 1-5 日",
         "2026-08-31T16:00:00+00:00",
-        "2026-09-04T06:50:00+00:00",
-        1128,
-        232,
+        "2026-09-05T08:39:00+00:00",
+        1290,
+        306,
         "Cloudflare Web Analytics PDF",
     ),
 )
@@ -143,6 +155,17 @@ class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.event_logger: Any | None = None
+        self.resource_policy: ResourcePolicy | None = None
+
+    def _check_job_admission(self, connection: sqlite3.Connection) -> None:
+        if self.resource_policy is not None:
+            self.resource_policy.check_job_capacity(connection)
+
+    @contextmanager
+    def locked_upload_admission(self):
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
 
     def configure_event_logger(self, event_logger: Any) -> None:
         self.event_logger = event_logger
@@ -180,9 +203,15 @@ class Database:
                 "input_mode",
                 "source_upload_size_bytes",
                 "source_upload_sha256",
+                "resume_stage",
+                "render_vocal_mode",
+                "review_generation",
             ):
                 if name not in columns:
                     definition = (
+                        "INTEGER NOT NULL DEFAULT 0"
+                        if name == "review_generation"
+                        else
                         "TEXT NOT NULL DEFAULT 'VIDEO'"
                         if name == "input_mode"
                         else "INTEGER"
@@ -301,6 +330,12 @@ class Database:
             )
             connection.execute(
                 """
+                CREATE INDEX IF NOT EXISTS idx_analytics_daily_updated
+                ON analytics_daily_overrides(updated_at DESC)
+                """
+            )
+            connection.execute(
+                """
                 INSERT OR IGNORE INTO analytics_meta (key, value)
                 VALUES ('tracking_started_at', ?)
                 """,
@@ -315,6 +350,23 @@ class Database:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [(*item, imported_at) for item in ANALYTICS_IMPORTS],
+            )
+            connection.execute(
+                """
+                UPDATE analytics_imports
+                SET label = ?, period_end = ?, pageviews = ?, visits = ?,
+                    source = ?, imported_at = ?
+                WHERE source_key = 'cloudflare-2026-09-partial'
+                  AND pageviews = 1128 AND visits = 232
+                """,
+                (
+                    ANALYTICS_IMPORTS[1][1],
+                    ANALYTICS_IMPORTS[1][3],
+                    ANALYTICS_IMPORTS[1][4],
+                    ANALYTICS_IMPORTS[1][5],
+                    ANALYTICS_IMPORTS[1][6],
+                    imported_at,
+                ),
             )
             connection.execute(
                 """
@@ -344,6 +396,8 @@ class Database:
     ) -> dict:
         timestamp = utc_now()
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._check_job_admission(connection)
             connection.execute(
                 """
                 INSERT INTO jobs (
@@ -434,6 +488,21 @@ class Database:
     ) -> dict:
         timestamp = utc_now()
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if client_submission_id is not None:
+                existing = connection.execute(
+                    "SELECT * FROM upload_tickets WHERE client_submission_id = ? "
+                    "AND status IN ('WAITING', 'READY', 'UPLOADING')",
+                    (client_submission_id,),
+                ).fetchone()
+                if existing is not None:
+                    if existing["video_name"] != video_name or existing["video_size_bytes"] != video_size_bytes:
+                        raise ValueError("Upload session metadata does not match")
+                    return dict(existing)
+            if self.resource_policy is not None:
+                self.resource_policy.check_upload_capacity(
+                    connection, size_bytes=video_size_bytes, client_key=client_key,
+                )
             connection.execute(
                 """
                 INSERT INTO upload_tickets (
@@ -475,6 +544,16 @@ class Database:
             row = connection.execute(
                 "SELECT * FROM upload_tickets WHERE id = ?",
                 (ticket_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_active_upload_by_submission(self, submission_id: str) -> dict | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """SELECT * FROM upload_tickets WHERE client_submission_id = ?
+                   AND status IN ('WAITING', 'READY', 'UPLOADING')
+                   ORDER BY created_at DESC LIMIT 1""",
+                (submission_id,),
             ).fetchone()
         return dict(row) if row else None
 
@@ -735,6 +814,14 @@ class Database:
             ).fetchone()
         return dict(row) if row else None
 
+    @contextmanager
+    def locked_job(self, job_id: str) -> Iterator[dict | None]:
+        # Keep short artifact commits serialized with state transitions.
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            yield dict(row) if row else None
+
     def get_job_by_client_submission_id(
         self,
         client_submission_id: str,
@@ -762,6 +849,7 @@ class Database:
         timeline_path: Path | None = None,
         ass_path: Path | None = None,
         output_path: Path | None = None,
+        render_vocal_mode: str | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> None:
@@ -781,6 +869,20 @@ class Database:
             error_message,
             utc_now(),
         ]
+        if stage in {"ALIGNMENT_QUEUED", "CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}:
+            assignments.append("resume_stage = ?")
+            values.append(stage)
+        elif stage == "RENDERING_VIDEO":
+            assignments.append(
+                "resume_stage = CASE WHEN input_mode = 'AUDIO_ONLY' "
+                "THEN 'CLOUD_RENDER_QUEUED' ELSE 'VIDEO_RENDER_QUEUED' END"
+            )
+        elif stage == "EXTRACTING_AUDIO":
+            assignments.append("resume_stage = NULL")
+            assignments.append("review_generation = review_generation + 1")
+        if render_vocal_mode is not None:
+            assignments.append("render_vocal_mode = ?")
+            values.append(render_vocal_mode)
         if audio_path is not None:
             assignments.append("audio_path = ?")
             values.append(str(audio_path))
@@ -801,6 +903,7 @@ class Database:
             values.append(str(output_path))
         values.append(job_id)
 
+        check_interrupted()
         with self.connect() as connection:
             cursor = connection.execute(
                 f"""
@@ -878,13 +981,25 @@ class Database:
         video_sha256: str,
         timeline_path: Path,
         ass_path: Path,
+        expected_updated_at: str,
+        upload_ticket_id: str | None = None,
     ) -> bool:
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._check_job_admission(connection)
+            if upload_ticket_id is not None:
+                ticket = connection.execute(
+                    "SELECT status FROM upload_tickets WHERE id = ?", (upload_ticket_id,),
+                ).fetchone()
+                if ticket is None or ticket["status"] != "UPLOADING":
+                    return False
             cursor = connection.execute(
                 """
                 UPDATE jobs
                 SET status = 'UPLOADED',
                     stage = 'CLOUD_RENDER_QUEUED',
+                    resume_stage = 'CLOUD_RENDER_QUEUED',
+                    render_vocal_mode = vocal_mode,
                     progress = 10,
                     video_path = ?,
                     video_size_bytes = ?,
@@ -898,6 +1013,7 @@ class Database:
                 WHERE id = ?
                   AND input_mode = 'AUDIO_ONLY'
                   AND status IN ('ALIGNED', 'SUBTITLE_GENERATED', 'COMPLETED')
+                  AND updated_at = ?
                 """,
                 (
                     str(video_path),
@@ -907,8 +1023,15 @@ class Database:
                     str(ass_path),
                     utc_now(),
                     job_id,
+                    expected_updated_at,
                 ),
             )
+            if cursor.rowcount == 1 and upload_ticket_id is not None:
+                connection.execute(
+                    """UPDATE upload_tickets SET status = 'COMPLETED', job_id = ?,
+                       updated_at = ?, last_seen_at = ? WHERE id = ?""",
+                    (job_id, utc_now(), utc_now(), upload_ticket_id),
+                )
         queued = cursor.rowcount == 1
         if queued:
             self.record_event_log(
@@ -945,11 +1068,14 @@ class Database:
 
     def queue_alignment(self, job_id: str) -> bool:
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._check_job_admission(connection)
             cursor = connection.execute(
                 """
                 UPDATE jobs
                 SET status = 'UPLOADED',
                     stage = 'ALIGNMENT_QUEUED',
+                    resume_stage = 'ALIGNMENT_QUEUED',
                     progress = 80,
                     error_code = NULL,
                     error_message = NULL,
@@ -987,6 +1113,8 @@ class Database:
                 UPDATE jobs
                 SET status = 'LYRICS_PROCESSED',
                     stage = 'READING_REVIEW_REQUIRED',
+                    review_generation = review_generation + 1,
+                    resume_stage = NULL,
                     progress = 80,
                     timeline_path = NULL,
                     ass_path = NULL,
@@ -1102,6 +1230,147 @@ class Database:
                 (visit_hash, path, utc_now()),
             )
 
+    @staticmethod
+    def _analytics_timezone() -> timezone:
+        return timezone(timedelta(hours=8))
+
+    def _analytics_cutoff(self, connection: sqlite3.Connection) -> datetime:
+        row = connection.execute(
+            "SELECT MAX(period_end) AS cutoff FROM analytics_imports"
+        ).fetchone()
+        value = row["cutoff"] if row else None
+        return (
+            datetime.fromisoformat(value)
+            if value
+            else datetime.min.replace(tzinfo=UTC)
+        )
+
+    def upsert_daily_traffic(self, *, day: date, pageviews: int, visits: int) -> None:
+        with self.connect() as connection:
+            cutoff_day = self._analytics_cutoff(connection).astimezone(
+                self._analytics_timezone()
+            ).date()
+            if day < cutoff_day:
+                raise ValueError("daily traffic overlaps Cloudflare PDF history")
+            connection.execute(
+                """
+                INSERT INTO analytics_daily_overrides (day, pageviews, visits, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(day) DO UPDATE SET
+                    pageviews = excluded.pageviews,
+                    visits = excluded.visits,
+                    updated_at = excluded.updated_at
+                """,
+                (day.isoformat(), pageviews, visits, utc_now()),
+            )
+
+    def traffic_report(self, *, date_from: date, date_to: date) -> dict[str, Any]:
+        analytics_tz = self._analytics_timezone()
+        range_start = datetime.combine(date_from, time.min, analytics_tz)
+        range_end = datetime.combine(date_to, time.max, analytics_tz)
+        with self.connect() as connection:
+            imports = connection.execute(
+                """
+                SELECT source_key, label, period_start, period_end,
+                       pageviews, visits, source
+                FROM analytics_imports
+                ORDER BY period_start
+                """
+            ).fetchall()
+            cutoff = self._analytics_cutoff(connection)
+            live_rows = connection.execute(
+                """
+                SELECT date(datetime(viewed_at), '+8 hours') AS day,
+                       COUNT(*) AS pageviews,
+                       COUNT(DISTINCT visit_hash) AS visits
+                FROM pageviews
+                WHERE viewed_at > ? AND viewed_at >= ? AND viewed_at <= ?
+                GROUP BY day
+                ORDER BY day
+                """,
+                (
+                    cutoff.isoformat(),
+                    range_start.astimezone(UTC).isoformat(),
+                    range_end.astimezone(UTC).isoformat(),
+                ),
+            ).fetchall()
+            overrides = connection.execute(
+                """
+                SELECT day, pageviews, visits
+                FROM analytics_daily_overrides
+                WHERE day >= ? AND day <= ?
+                ORDER BY day
+                """,
+                (date_from.isoformat(), date_to.isoformat()),
+            ).fetchall()
+
+        periods: list[dict[str, Any]] = []
+        has_partial_pdf_period = False
+        for row in imports:
+            started_at = datetime.fromisoformat(row["period_start"])
+            ended_at = datetime.fromisoformat(row["period_end"])
+            if ended_at < range_start or started_at > range_end:
+                continue
+            if range_start > started_at or range_end < ended_at:
+                has_partial_pdf_period = True
+            periods.append(
+                {
+                    "key": row["source_key"],
+                    "label": row["label"],
+                    "started_at": row["period_start"],
+                    "ended_at": row["period_end"],
+                    "pageviews": int(row["pageviews"]),
+                    "visits": int(row["visits"]),
+                    "source": row["source"],
+                    "editable": False,
+                }
+            )
+
+        live_by_day = {
+            row["day"]: (int(row["pageviews"]), int(row["visits"]))
+            for row in live_rows
+            if row["day"]
+        }
+        override_by_day = {
+            row["day"]: (int(row["pageviews"]), int(row["visits"]))
+            for row in overrides
+        }
+        daily_periods: list[dict[str, Any]] = []
+        for day_key in sorted(set(live_by_day) | set(override_by_day)):
+            values = override_by_day.get(day_key, live_by_day.get(day_key, (0, 0)))
+            day_value = date.fromisoformat(day_key)
+            started_at = datetime.combine(day_value, time.min, analytics_tz)
+            ended_at = datetime.combine(day_value, time.max, analytics_tz)
+            daily_periods.append(
+                {
+                    "key": f"daily-{day_key}",
+                    "label": day_value.strftime("%m-%d"),
+                    "started_at": started_at.isoformat(),
+                    "ended_at": ended_at.isoformat(),
+                    "pageviews": values[0],
+                    "visits": values[1],
+                    "source": (
+                        "管理员修正"
+                        if day_key in override_by_day
+                        else "Nicokara 实时记录"
+                    ),
+                    "editable": True,
+                }
+            )
+        series = periods + daily_periods
+        pageviews = sum(item["pageviews"] for item in series)
+        visits = sum(item["visits"] for item in series)
+        return {
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "pageviews": pageviews,
+            "visits": visits,
+            "pages_per_visit": round(pageviews / visits, 2) if visits else 0.0,
+            "has_partial_pdf_period": has_partial_pdf_period,
+            "manual_entry_min_date": cutoff.astimezone(analytics_tz).date().isoformat(),
+            "series": series,
+        }
+
     def traffic_metrics(self) -> dict[str, Any]:
         now = datetime.now(UTC)
         since_24h = (now - timedelta(hours=24)).isoformat()
@@ -1130,15 +1399,6 @@ class Database:
                 """
             ).fetchone()
             cutoff = import_totals["cutoff"] or ""
-            live_totals = connection.execute(
-                """
-                SELECT COUNT(*) AS pageviews,
-                       COUNT(DISTINCT visit_hash) AS visits
-                FROM pageviews
-                WHERE viewed_at > ?
-                """,
-                (cutoff,),
-            ).fetchone()
             recent = connection.execute(
                 """
                 SELECT COUNT(*) AS pageviews,
@@ -1156,8 +1416,33 @@ class Database:
                 """,
                 (cutoff, active_since),
             ).fetchone()
-        live_pageviews = int(live_totals["pageviews"])
-        live_visits = int(live_totals["visits"])
+            overrides = connection.execute(
+                "SELECT day, pageviews, visits FROM analytics_daily_overrides"
+            ).fetchall()
+            live_days = connection.execute(
+                """
+                SELECT date(datetime(viewed_at), '+8 hours') AS day,
+                       COUNT(*) AS pageviews,
+                       COUNT(DISTINCT visit_hash) AS visits
+                FROM pageviews
+                WHERE viewed_at > ?
+                GROUP BY day
+                """,
+                (cutoff,),
+            ).fetchall()
+        effective_days = {
+            row["day"]: (int(row["pageviews"]), int(row["visits"]))
+            for row in live_days
+            if row["day"]
+        }
+        effective_days.update(
+            {
+                row["day"]: (int(row["pageviews"]), int(row["visits"]))
+                for row in overrides
+            }
+        )
+        live_pageviews = sum(values[0] for values in effective_days.values())
+        live_visits = sum(values[1] for values in effective_days.values())
         pageviews = int(import_totals["pageviews"]) + live_pageviews
         visits = int(import_totals["visits"]) + live_visits
         periods = [
@@ -1236,11 +1521,17 @@ class Database:
     def requeue_job(self, job_id: str) -> dict | None:
         timestamp = utc_now()
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._check_job_admission(connection)
             cursor = connection.execute(
                 """
                 UPDATE jobs
                 SET status = 'UPLOADED',
-                    stage = 'REQUEUED_BY_ADMIN',
+                    stage = COALESCE(resume_stage, CASE
+                        WHEN stage = 'RENDERING_VIDEO' OR error_code = 'VIDEO_RENDERING_FAILED'
+                        THEN CASE WHEN input_mode = 'AUDIO_ONLY'
+                            THEN 'CLOUD_RENDER_QUEUED' ELSE 'VIDEO_RENDER_QUEUED' END
+                        ELSE 'REQUEUED_BY_ADMIN' END),
                     progress = 0,
                     error_code = NULL,
                     error_message = NULL,
@@ -1266,11 +1557,17 @@ class Database:
     def retry_failed_job(self, job_id: str) -> dict | None:
         timestamp = utc_now()
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._check_job_admission(connection)
             cursor = connection.execute(
                 """
                 UPDATE jobs
                 SET status = 'UPLOADED',
-                    stage = 'REQUEUED_BY_USER',
+                    stage = COALESCE(resume_stage, CASE
+                        WHEN stage = 'RENDERING_VIDEO' OR error_code = 'VIDEO_RENDERING_FAILED'
+                        THEN CASE WHEN input_mode = 'AUDIO_ONLY'
+                            THEN 'CLOUD_RENDER_QUEUED' ELSE 'VIDEO_RENDER_QUEUED' END
+                        ELSE 'REQUEUED_BY_USER' END),
                     progress = 0,
                     error_code = NULL,
                     error_message = NULL,
@@ -1696,7 +1993,7 @@ class Database:
                 """,
                 (
                     "Processing was interrupted by a service restart. "
-                    "Create a new task to retry.",
+                    "Retry this task to resume processing.",
                     timestamp,
                 ),
             )

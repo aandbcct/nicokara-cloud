@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class AdminTrafficPeriodResponse(BaseModel):
@@ -15,6 +16,10 @@ class AdminTrafficPeriodResponse(BaseModel):
     source: str
 
 
+class AdminTrafficSeriesPointResponse(AdminTrafficPeriodResponse):
+    editable: bool
+
+
 class AdminTrafficResponse(BaseModel):
     tracking_started_at: str
     pageviews: int
@@ -24,6 +29,28 @@ class AdminTrafficResponse(BaseModel):
     active_visits: int
     pages_per_visit: float
     periods: list[AdminTrafficPeriodResponse]
+
+
+class AdminTrafficReportResponse(BaseModel):
+    date_from: date
+    date_to: date
+    pageviews: int
+    visits: int
+    pages_per_visit: float
+    has_partial_pdf_period: bool
+    manual_entry_min_date: date
+    series: list[AdminTrafficSeriesPointResponse]
+
+
+class AdminDailyTrafficRequest(BaseModel):
+    pageviews: int = Field(ge=0)
+    visits: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def visits_cannot_exceed_pageviews(self) -> "AdminDailyTrafficRequest":
+        if self.visits > self.pageviews:
+            raise ValueError("Visits cannot exceed Pageviews.")
+        return self
 
 
 class AdminOverviewResponse(BaseModel):

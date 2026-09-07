@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from math import ceil
 from statistics import mean, median
 from typing import Any
 
@@ -17,6 +18,7 @@ class TimelineErrorMetrics:
     mean_absolute_error_ms: float
     median_absolute_error_ms: float
     max_absolute_error_ms: int
+    p95_absolute_error_ms: int
 
 
 @dataclass(frozen=True)
@@ -26,9 +28,13 @@ class BenchmarkCaseResult:
     mean_absolute_error_ms: float | None = None
     median_absolute_error_ms: float | None = None
     max_absolute_error_ms: int | None = None
+    p95_absolute_error_ms: int | None = None
     elapsed_seconds: float | None = None
     peak_rss_mb: float | None = None
     error: str | None = None
+    actual_engine: str | None = None
+    reference_sha256: str | None = None
+    candidate_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -49,6 +55,8 @@ def compare_timelines(
 ) -> TimelineErrorMetrics:
     expected = _flatten(reference)
     actual = _flatten(candidate)
+    if any(start < 0 or end <= start for _, start, end in expected + actual):
+        raise BenchmarkDataError("Timeline contains invalid mora timing")
     if not expected or [item[0] for item in expected] != [
         item[0] for item in actual
     ]:
@@ -71,6 +79,7 @@ def compare_timelines(
         mean_absolute_error_ms=mean(errors),
         median_absolute_error_ms=median(errors),
         max_absolute_error_ms=max(errors),
+        p95_absolute_error_ms=sorted(errors)[ceil(len(errors) * 0.95) - 1],
     )
 
 
@@ -91,17 +100,22 @@ def summarize_cases(cases: list[BenchmarkCaseResult]) -> dict[str, Any]:
             "median_absolute_error_ms",
         ),
         "mean_elapsed_seconds": _mean_value(
-            successful,
+            cases,
             "elapsed_seconds",
         ),
         "peak_rss_mb": max(
             (
                 case.peak_rss_mb
-                for case in successful
+                for case in cases
                 if case.peak_rss_mb is not None
             ),
             default=None,
         ),
+        "max_absolute_error_ms": max(
+            (case.max_absolute_error_ms for case in successful
+             if case.max_absolute_error_ms is not None), default=None,
+        ),
+        "mean_case_p95_absolute_error_ms": _mean_value(successful, "p95_absolute_error_ms"),
     }
 
 

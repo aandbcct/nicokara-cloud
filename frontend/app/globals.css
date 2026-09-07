@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 @theme {
   --color-background: oklch(95.8% 0.008 230);
   --color-foreground: oklch(24% 0.018 260);
@@ -21,6 +23,25 @@
 }
 
 @layer base {
+  :root { color-scheme: light; }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --color-background: #17191d;
+    --color-foreground: #ecedf1;
+    --color-card: #202329;
+    --color-card-foreground: #ecedf1;
+    --color-primary: #f19bbb;
+    --color-primary-foreground: #351321;
+    --color-secondary: #8acdcc;
+    --color-secondary-foreground: #122d2c;
+    --color-muted: #2b3038;
+    --color-muted-foreground: #b4bdcb;
+    --color-accent: #3b2a35;
+    --color-accent-foreground: #ecedf1;
+    --color-border: #454c59;
+    --color-ring: #f19bbb;
+    --color-destructive: #ff9299;
+  }
   * {
     @apply border-border;
   }

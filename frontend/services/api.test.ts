@@ -697,6 +697,15 @@ describe("getTimeline", () => {
 });
 
 describe("timeline review drafts", () => {
+  it("exposes save conflicts so the editor can offer a refresh", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ detail: "Draft changed in another page" }), { status: 409 },
+    )));
+    const { saveTimelineReviewDraft } = await import("./api");
+    await expect(saveTimelineReviewDraft("job-1", { lines: [] }))
+      .rejects.toMatchObject({ status: 409 });
+  });
+
   it("returns null when no cloud draft has been saved", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -863,6 +872,18 @@ describe("getInstrumentalAudio", () => {
 });
 
 describe("submitCloudRender", () => {
+  function mockCloudFetch(result: unknown, status = 202) {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "ticket-cloud", status: "UPLOADING" })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ticket_id: "ticket-cloud", chunk_size_bytes: 8 * 1024 * 1024, total_chunks: 1,
+        received_chunks: 0, received_chunk_indices: [], missing_chunk_indices: [0],
+      })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(result), { status }));
+    vi.stubGlobal("fetch", fetcher);
+    return fetcher;
+  }
+
   it("uploads the original video and reviewed timeline to the render-only queue", async () => {
     const queued = {
       id: "job-1",
@@ -870,18 +891,16 @@ describe("submitCloudRender", () => {
       stage: "CLOUD_RENDER_QUEUED",
       progress: 0,
     };
+    const fetcher = mockCloudFetch(queued);
     class FakeXMLHttpRequest {
       readonly upload = { addEventListener: vi.fn() };
       readonly open = vi.fn((method: string, url: string) => {
         expect(method).toBe("POST");
-        expect(url).toBe("/api/v1/browser/jobs/job-1/cloud-render");
+        expect(url).toBe("/api/v1/upload-tickets/ticket-cloud/chunks/part/0");
       });
       readonly getResponseHeader = vi.fn(() => null);
       readonly send = vi.fn((body: FormData) => {
-        expect(body.get("video")).toBeInstanceOf(File);
-        expect(JSON.parse(String(body.get("timeline_review")))).toMatchObject({
-          lines: [{ start_ms: 1000, end_ms: 2000 }],
-        });
+        expect(body.get("chunk")).toBeInstanceOf(File);
         this.listeners.load?.forEach((listener) => listener());
       });
       status = 202;
@@ -904,9 +923,13 @@ describe("submitCloudRender", () => {
         vi.fn(),
       ),
     ).resolves.toMatchObject(queued);
+    const body = fetcher.mock.calls[2][1].body as FormData;
+    expect(body.get("upload_ticket_id")).toBe("ticket-cloud");
+    expect(JSON.parse(String(body.get("timeline_review")))).toMatchObject({ lines: [{ start_ms: 1000, end_ms: 2000 }] });
   });
 
-  it("preserves structured FastAPI validation details from an XHR response", async () => {
+  it("preserves structured FastAPI validation details from completion", async () => {
+    mockCloudFetch({ detail: [{ type: "missing", loc: ["body", "timeline_review"], msg: "Field required", input: null }] }, 422);
     class ValidationXMLHttpRequest {
       readonly upload = { addEventListener: vi.fn() };
       readonly open = vi.fn();
@@ -914,7 +937,7 @@ describe("submitCloudRender", () => {
       readonly send = vi.fn(() => {
         this.listeners.load?.forEach((listener) => listener());
       });
-      status = 422;
+      status = 200;
       responseText = JSON.stringify({
         detail: [
           {
@@ -952,7 +975,7 @@ describe("submitCloudRender", () => {
     });
   });
 
-  it("recovers the job status when the render was already queued", async () => {
+  it("reports a conflict instead of treating an unrelated completed render as success", async () => {
     const queued = {
       id: "job-1",
       status: "UPLOADED",
@@ -966,7 +989,7 @@ describe("submitCloudRender", () => {
       readonly send = vi.fn(() => {
         this.listeners.load?.forEach((listener) => listener());
       });
-      status = 409;
+      status = 200;
       responseText = JSON.stringify({
         detail: "当前任务不能进入云端仅渲染队列",
       });
@@ -978,15 +1001,8 @@ describe("submitCloudRender", () => {
       }
     }
     vi.stubGlobal("XMLHttpRequest", FakeXMLHttpRequest as unknown as typeof XMLHttpRequest);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify(queued), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    );
+    const fetcher = mockCloudFetch({ detail: "时间轴已变化" }, 409);
+    fetcher.mockResolvedValue(new Response(JSON.stringify(queued)));
     const { submitCloudRender } = await import("./api");
 
     await expect(
@@ -996,7 +1012,8 @@ describe("submitCloudRender", () => {
         { lines: [] },
         vi.fn(),
       ),
-    ).resolves.toMatchObject(queued);
+    ).rejects.toMatchObject({ status: 409 });
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 });
 

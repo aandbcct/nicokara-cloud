@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.database import Database, JobCanceledError
+from app.core.processing_control import ProcessingInterrupted, check_interrupted
 from app.core.event_logging import (
     StructuredEventLogger,
     current_event_context,
@@ -88,6 +89,7 @@ class TranscriptionPipeline:
         )
 
     def process(self, job_id: str) -> None:
+        check_interrupted()
         job = self.database.get_job(job_id)
         if job is None:
             raise KeyError(f"Job not found: {job_id}")
@@ -99,6 +101,7 @@ class TranscriptionPipeline:
         pipeline_started = time.perf_counter()
         pipeline_error: BaseException | None = None
         was_canceled = False
+        was_interrupted = False
         run_context = event_context(
             job_id=job_id,
             run_id=run_id,
@@ -126,6 +129,8 @@ class TranscriptionPipeline:
         transcript_path = job_dir / "transcript.json"
         lyrics_processed_path = job_dir / "lyrics_processed.json"
         timeline_path = job_dir / "timeline.json"
+        if job.get("stage") in {"CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}:
+            timeline_path = Path(job["timeline_path"]) if job.get("timeline_path") else timeline_path
         imported_lyrics_path = job_dir / "imported_lyrics_processed.json"
         imported_timeline_path = job_dir / "imported_timeline.json"
         imported_ass_path = job_dir / "imported_subtitle.ass"
@@ -156,8 +161,9 @@ class TranscriptionPipeline:
                     stage_state=resumed_stage,
                 )
                 return
-            if job.get("stage") == "CLOUD_RENDER_QUEUED":
+            if job.get("stage") in {"CLOUD_RENDER_QUEUED", "VIDEO_RENDER_QUEUED"}:
                 stage = "RENDERING_VIDEO"
+                vocal_mode = job.get("render_vocal_mode") or job.get("vocal_mode", "on")
                 if self.video_renderer is None or not ass_path.is_file():
                     raise RuntimeError("Kirakara cloud renderer is unavailable")
                 self.database.update_job_state(
@@ -165,10 +171,10 @@ class TranscriptionPipeline:
                     status="PROCESSING",
                     stage=stage,
                     progress=50,
+                    render_vocal_mode=vocal_mode,
                     timeline_path=timeline_path if timeline_path.exists() else None,
                     ass_path=ass_path,
                 )
-                vocal_mode = job.get("vocal_mode", "on")
                 with self.event_logger.stage(
                     job_id=job_id,
                     run_id=run_id,
@@ -713,6 +719,7 @@ class TranscriptionPipeline:
                                 status="PROCESSING",
                                 stage=stage,
                                 progress=98,
+                                render_vocal_mode=render_vocal_mode,
                                 audio_path=audio_path,
                                 transcript_path=(
                                     transcript_path
@@ -850,6 +857,10 @@ class TranscriptionPipeline:
                         transcript_path if transcript_path.exists() else None
                     ),
                 )
+        except ProcessingInterrupted:
+            was_interrupted = True
+            logger.info("Job %s interrupted; persisted state retained", job_id)
+            return
         except JobCanceledError:
             was_canceled = True
             logger.info("Job %s stopped after user cancellation", job_id)
@@ -946,6 +957,11 @@ class TranscriptionPipeline:
                     message="任务处理流水线已取消",
                     stage=final_job.get("stage") if final_job else stage,
                     duration_ms=duration_ms,
+                )
+            elif was_interrupted:
+                self.event_logger.emit(
+                    event="pipeline.interrupted", level="WARNING", category="pipeline",
+                    message="服务停止处理，任务状态已保留", duration_ms=duration_ms,
                 )
             elif (
                 final_job is not None
@@ -1135,6 +1151,7 @@ class TranscriptionPipeline:
             status="PROCESSING",
             stage="RENDERING_VIDEO",
             progress=98,
+            render_vocal_mode=render_vocal_mode,
             audio_path=audio_path,
             lyrics_processed_path=(
                 lyrics_processed_path if lyrics_processed_path.is_file() else None
@@ -1541,11 +1558,15 @@ class TranscriptionPipeline:
             return
 
         stage_state[0] = "RENDERING_VIDEO"
+        render_vocal_mode = (
+            "off" if job.get("vocal_mode", "on") == "off" else "on"
+        )
         self.database.update_job_state(
             job_id,
             status="PROCESSING",
             stage="RENDERING_VIDEO",
             progress=98,
+            render_vocal_mode=render_vocal_mode,
             audio_path=audio_path,
             transcript_path=(
                 transcript_path if transcript_path.exists() else None
@@ -1553,9 +1574,6 @@ class TranscriptionPipeline:
             lyrics_processed_path=lyrics_processed_path,
             timeline_path=timeline_path,
             ass_path=ass_path,
-        )
-        render_vocal_mode = (
-            "off" if job.get("vocal_mode", "on") == "off" else "on"
         )
         with self.event_logger.stage(
             job_id=job_id,

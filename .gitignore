@@ -5,6 +5,7 @@
 .cursor/
 .codegraph/
 .pytest_cache/
+.npm-cache/
 .pytest-tmp-*/
 .tmp/
 __pycache__/
@@ -34,6 +35,7 @@ release/*.tar.gz
 release/*.tar.gz.sha256
 release/SHA256SUMS
 release/_stage-*/
+release/_verify-*/
 release/.staging-*/
 release/_archive-list-*.txt
 release/deploy-nicokara-cloud-v*-*-*.sh

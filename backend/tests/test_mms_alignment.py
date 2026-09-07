@@ -674,11 +674,11 @@ def test_subprocess_runtime_uses_the_shared_alignment_limiter(
         def __init__(self) -> None:
             self.entered = 0
 
-        def __enter__(self):
+        def acquire(self, *, timeout):
             self.entered += 1
-            return self
+            return True
 
-        def __exit__(self, exc_type, exc, traceback):
+        def release(self):
             self.entered -= 1
 
     limiter = RecordingLimiter()

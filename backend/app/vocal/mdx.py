@@ -4,6 +4,7 @@ import logging
 import shutil
 import threading
 from pathlib import Path
+from app.core.processing_control import check_interrupted
 from typing import Any, Callable
 
 from app.video.audio import AudioExtractionError
@@ -87,6 +88,7 @@ class MDXNetVocalRemover:
         return cached_model if cached_model.is_file() else None
 
     def remove_vocals(self, input_path: Path, output_path: Path) -> None:
+        check_interrupted()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             with self._lock:
@@ -98,6 +100,7 @@ class MDXNetVocalRemover:
                     str(input_path),
                     {"Instrumental": output_path.stem},
                 )
+                check_interrupted()
                 self._place_output(output_files, output_path)
         except AudioExtractionError:
             raise
@@ -117,6 +120,7 @@ class MDXNetVocalRemover:
         vocals_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             with self._lock:
+                check_interrupted()
                 vocals_path.unlink(missing_ok=True)
                 instrumental_path.unlink(missing_ok=True)
                 separator = self._create_separator(
@@ -130,6 +134,7 @@ class MDXNetVocalRemover:
                         "Instrumental": instrumental_path.stem,
                     },
                 )
+                check_interrupted()
                 self._place_output(output_files, vocals_path)
                 self._place_output(output_files, instrumental_path)
         except AudioExtractionError:

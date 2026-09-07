@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile, status
+from app.core.resource_limits import check_disk_space
 
 
 CHUNK_SIZE = 1024 * 1024
@@ -63,6 +64,7 @@ async def save_mp4(
                 if len(header) < 32:
                     header.extend(chunk[: 32 - len(header)])
                 digest.update(chunk)
+                check_disk_space(destination.parent, len(chunk))
                 output.write(chunk)
 
         if total == 0:
@@ -107,6 +109,7 @@ async def save_audio(
                 if len(header) < 32:
                     header.extend(chunk[: 32 - len(header)])
                 digest.update(chunk)
+                check_disk_space(destination.parent, len(chunk))
                 output.write(chunk)
 
         if total == 0:

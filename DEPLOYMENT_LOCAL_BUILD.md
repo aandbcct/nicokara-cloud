@@ -1,5 +1,27 @@
 # 本地构建后部署到 `/data`
 
+## 本次更新的自动打包与升级
+
+现有服务器升级优先使用 `release/package_release.py` 与
+`release/deploy-update.template.sh`。前端构建完成并提交源码后，在根目录执行：
+
+```powershell
+cd frontend
+$env:NEXT_PUBLIC_API_URL = '/api/v1'
+npm run build
+cd ..
+backend/.venv/Scripts/python.exe release/package_release.py
+```
+
+工具生成独立运行的前端、后端源码、文件校验清单、对应部署脚本和 SSH 指令。
+仅收录明确指定的源码和构建产物，不包含本地密钥、数据库、模型、任务文件或 Python 环境。
+部署脚本适用于已有的 `/data/nicokara` 服务，保留现有 worker、公告及密钥配置，
+先安装新版本依赖，待任务队列空闲后停机备份 SQLite，再切换版本并验证健康状态。
+失败时尝试恢复原版本与配置，数据库备份保留用于人工恢复，不自动删除新任务或回退数据。
+前端无需在服务器重新构建，Linux Python 依赖仍在服务器安装。
+
+下方保留首次部署及手动部署的完整说明。
+
 本文适用于以下部署方式：
 
 - 本地完成前端生产构建。
@@ -200,6 +222,10 @@ NICOKARA_STORAGE_DIR=/data/nicokara/shared/storage/jobs
 NICOKARA_ALLOWED_ORIGINS=http://SERVER_IP
 NICOKARA_TRUSTED_PROXY_HOSTS=127.0.0.1,::1
 NICOKARA_MAX_PENDING_JOBS=4
+NICOKARA_MAX_ACTIVE_JOBS=32
+NICOKARA_MAX_UPLOAD_SESSIONS=32
+NICOKARA_MIN_FREE_DISK_BYTES=2147483648
+NICOKARA_SHUTDOWN_TIMEOUT_SECONDS=30
 NICOKARA_MAX_ACTIVE_JOBS_PER_CLIENT=2
 NICOKARA_WORKER_CONFIG_PATH=/data/nicokara/shared/workers.toml
 NICOKARA_WORKER_HEARTBEAT_INTERVAL_SECONDS=5
@@ -233,6 +259,23 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 
 ## 7. systemd
 
+后端使用一个 Uvicorn 进程，处理并发由 `workers.toml` 管理；不要通过 Uvicorn
+`--workers` 启动多个独立调度器。SQLite 会串行检查任务及上传会话上限，内存队列只保留
+`NICOKARA_MAX_PENDING_JOBS` 个待执行任务，其余已接收任务保存在数据库中，空位释放后自动调度。
+
+`NICOKARA_MAX_ACTIVE_JOBS` 限制 `UPLOADED` 和 `PROCESSING` 任务总数；
+`NICOKARA_MAX_UPLOAD_SESSIONS` 同时限制视频票据和音频分片会话。新会话按文件大小的
+两倍检查合并所需空间，存储目录、数据库目录及接收大文件的系统临时目录保留至少
+`NICOKARA_MIN_FREE_DISK_BYTES` 空闲空间。空间不足或任务已满时返回 `503` 和
+`Retry-After: 60`；已有分片可在资源恢复后继续提交。磁盘检查是保护阈值，仍应设置反向代理
+的请求大小限制，并监控处理产物及临时目录实际用量。
+
+停机时停止领取新任务，最多等待当前任务 `NICOKARA_SHUTDOWN_TIMEOUT_SECONDS` 秒，
+随后中断 FFmpeg、MMS 子进程，并额外留出 0.5 秒回收时间。Whisper 在分段之间、UVR 在
+当前推理返回后响应取消；不能强制终止的原生推理线程不会阻止 Python 退出。等待中的任务在
+下次启动时自动恢复；中断的处理任务会标为失败，可用原任务重试。服务管理器的停止超时应比
+后端等待时间更长。Docker 默认配置为 45 秒，修改后端超时后也应同步调整。
+
 创建 `/etc/systemd/system/nicokara-backend.service`：
 
 ```ini
@@ -249,6 +292,7 @@ EnvironmentFile=/data/nicokara/shared/nicokara.env
 ExecStart=/data/nicokara/current/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=3
+TimeoutStopSec=45
 
 [Install]
 WantedBy=multi-user.target

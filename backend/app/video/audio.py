@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 from typing import Sequence
+from app.core.processing_control import ProcessingInterrupted, run_process
 
 
 class AudioExtractionError(RuntimeError):
@@ -46,13 +47,16 @@ class FFmpegAudioExtractor:
             "-ar", "16000", "-c:a", "pcm_s16le", str(output_path),
         ]
         try:
-            subprocess.run(
+            run_process(
                 command,
                 check=True,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
             )
+        except ProcessingInterrupted:
+            output_path.unlink(missing_ok=True)
+            raise
         except FileNotFoundError as exc:
             output_path.unlink(missing_ok=True)
             raise FFmpegUnavailableError(
@@ -86,13 +90,16 @@ class FFmpegAudioExtractor:
             "-ar", "44100", "-c:a", "pcm_s16le", str(output_path),
         ]
         try:
-            subprocess.run(
+            run_process(
                 command,
                 check=True,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
             )
+        except ProcessingInterrupted:
+            output_path.unlink(missing_ok=True)
+            raise
         except FileNotFoundError as exc:
             output_path.unlink(missing_ok=True)
             raise FFmpegUnavailableError(

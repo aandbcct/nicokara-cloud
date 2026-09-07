@@ -37,6 +37,7 @@ export type MobileSubmissionDependencies = {
     input: CreateJobInput,
     onProgress: (progress: number) => void,
     onQueueUpdate?: (ticket: UploadTicket) => void,
+    signal?: AbortSignal,
   ): Promise<Job>;
 };
 
@@ -74,6 +75,7 @@ export async function submitMobileJob(
       videoInput(input),
       (progress) => emit("UPLOADING_VIDEO", progress),
       options.onQueueUpdate,
+      options.signal,
     );
     emit("COMPLETED", 100);
     return job;

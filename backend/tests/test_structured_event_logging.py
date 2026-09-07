@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import logging
+import subprocess
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,6 +22,46 @@ def load_event_logging_module():
     spec = importlib.util.find_spec("app.core.event_logging")
     assert spec is not None, "统一结构化日志模块尚未实现"
     return importlib.import_module("app.core.event_logging")
+
+
+def test_exception_diagnostics_preserve_wrapped_cause_and_redact_outputs() -> None:
+    event_logging = load_event_logging_module()
+    cause = subprocess.TimeoutExpired(["ffmpeg", "--token", "command-secret"], 120,
+                                      stderr=b"failed token=stderr-secret")
+    error = RuntimeError("Alignment failed")
+    error.__cause__ = cause
+    details = event_logging.exception_details(error, include_traceback=False)
+    assert details["error_summary"] == "Alignment failed"
+    assert details["root_cause"]["exception_type"] == "TimeoutExpired"
+    assert details["diagnostic_code"] == "TIMEOUT"
+    assert details["timeout_seconds"] == 120
+    assert details["stderr_tail"] == "failed token=[REDACTED]"
+    assert details["command"][-1] == "[REDACTED]"
+    assert "traceback" not in details
+    assert "command-secret" not in str(event_logging.exception_details(error))
+    assert "stderr-secret" not in str(details)
+
+
+def test_exception_diagnostics_handle_empty_and_cyclic_causes() -> None:
+    event_logging = load_event_logging_module()
+    error = RuntimeError("wrapper")
+    cause = TimeoutError()
+    error.__cause__ = cause
+    cause.__cause__ = error
+    details = event_logging.exception_details(error)
+    assert len(details["exception_chain"]) == 2
+    assert details["root_cause"]["error_summary"] == "TimeoutError"
+    assert details["diagnostic_code"] == "TIMEOUT"
+
+
+def test_exception_diagnostics_respect_suppressed_context() -> None:
+    event_logging = load_event_logging_module()
+    error = ValueError("invalid input")
+    error.__context__ = TimeoutError()
+    error.__suppress_context__ = True
+    details = event_logging.exception_details(error)
+    assert details["diagnostic_code"] == "UNKNOWN"
+    assert len(details["exception_chain"]) == 1
 
 
 def test_settings_expose_safe_production_logging_defaults(tmp_path: Path) -> None:
@@ -351,7 +392,9 @@ def test_runner_assigns_distinct_run_ids_and_records_queue_wait(tmp_path: Path) 
         runner = LocalTaskRunner(Pipeline(), event_logger=recorder)
         await runner.start()
         await runner.enqueue("same-job")
+        await runner.queue.join()
         await runner.enqueue("same-job")
+        await runner.queue.join()
         await runner.stop()
 
     import asyncio

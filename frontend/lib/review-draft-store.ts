@@ -169,9 +169,10 @@ function sameTimelineStructure(
   candidate: unknown,
 ) {
   if (!isRecord(candidate) || !Array.isArray(candidate.lines)) return false;
-  if (candidate.lines.length !== source.lines.length) return false;
+  const candidateLines = candidate.lines;
+  if (candidateLines.length !== source.lines.length) return false;
   return source.lines.every((sourceLine, lineIndex) => {
-    const candidateLine = candidate.lines[lineIndex];
+    const candidateLine = candidateLines[lineIndex];
     if (
       !isRecord(candidateLine)
       || typeof candidateLine.text !== "string"
@@ -181,8 +182,9 @@ function sameTimelineStructure(
     ) {
       return false;
     }
+    const candidateUnits = candidateLine.units;
     const unitsAreValid = sourceLine.units.every((_sourceUnit, unitIndex) => {
-      const candidateUnit = candidateLine.units[unitIndex];
+      const candidateUnit = candidateUnits[unitIndex];
       if (
         !isRecord(candidateUnit)
         || typeof candidateUnit.text !== "string"
@@ -199,8 +201,7 @@ function sameTimelineStructure(
         return false;
       }
       return candidateUnit.moras.every(
-        (_candidateMora, moraIndex) => {
-          const candidateMora = candidateUnit.moras[moraIndex];
+        (candidateMora, moraIndex) => {
           return isRecord(candidateMora)
             && candidateMora.reading === expectedMoras[moraIndex];
         },
@@ -233,8 +234,11 @@ function hasValidTimelineRanges(timeline: KirakaraTimeline) {
 export function compatibleTimelineDraft(
   source: KirakaraTimeline,
   candidate: unknown,
+  cloudSavedAt?: string | null,
 ): KirakaraTimeline | null {
   if (!isRecord(candidate) || !Array.isArray(candidate.lines)) return null;
+  if (source.sourceRevision && source.sourceRevision !== candidate.sourceRevision) return null;
+  if (cloudSavedAt !== undefined && candidate.baseSavedAt !== cloudSavedAt) return null;
   const timeline = candidate as KirakaraTimeline;
   return sameTimelineStructure(source, candidate) && hasValidTimelineRanges(timeline)
     ? timeline

@@ -8,6 +8,7 @@ import {
   MicOff,
   Sparkles,
   Upload,
+  Pause,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -81,6 +82,7 @@ export function UploadForm() {
     useState<ReviewedArtifactInspection | null>(null);
   const [vocalMode, setVocalMode] = useState("on");
   const [uploading, setUploading] = useState(false);
+  const [uploadPaused, setUploadPaused] = useState(false);
   const [draggingVideo, setDraggingVideo] = useState(false);
   const [uploadTicket, setUploadTicket] = useState<UploadTicket | null>(null);
   const [progress, setProgress] = useState(0);
@@ -91,6 +93,8 @@ export function UploadForm() {
     useState<MobileSubmissionState | null>(null);
   const [lyricsWarning, setLyricsWarning] =
     useState<PendingLyricsWarning | null>(null);
+
+  useEffect(() => () => mobileAbortController.current?.abort(), []);
 
   useEffect(() => {
     if (!video) return;
@@ -234,13 +238,14 @@ export function UploadForm() {
     }
 
     setUploading(true);
+    setUploadPaused(false);
     setProgress(0);
     setUploadTicket(null);
     setMobileSubmission(null);
     const useAudioOnly =
       mobileRoute === "AUDIO_ONLY" &&
       !reviewedArtifacts?.requiresRemoteVideo;
-    const abortController = useAudioOnly ? new AbortController() : null;
+    const abortController = new AbortController();
     mobileAbortController.current = abortController;
     try {
       const submissionInput = {
@@ -275,7 +280,7 @@ export function UploadForm() {
               onQueueUpdate: setUploadTicket,
             },
           )
-        : await createJob(submissionInput, setProgress, setUploadTicket);
+        : await createJob(submissionInput, setProgress, setUploadTicket, abortController.signal);
       mobileAbortController.current = null;
       if (job.input_mode === "AUDIO_ONLY") {
         rememberLocalVideo(job.id, video);
@@ -284,6 +289,7 @@ export function UploadForm() {
     } catch (reason) {
       const canceled =
         reason instanceof DOMException && reason.name === "AbortError";
+      setUploadPaused(canceled);
       setError(
         canceled
           ? null
@@ -321,6 +327,7 @@ export function UploadForm() {
           "同一种格式只选择一个文件，并确认文件内容没有被其他软件修改损坏。",
         ],
         retryable: false,
+        technicalDetails: [],
       });
     }
   }
@@ -470,10 +477,7 @@ export function UploadForm() {
       </section>
 
       <section aria-labelledby="reviewed-artifacts-heading">
-        <h2
-          id="reviewed-artifacts-heading"
-          className="mb-3 text-lg font-semibold"
-        >
+        <h2 id="reviewed-artifacts-heading" className="mb-3 text-lg font-semibold">
           导入本站调整数据（可选）
         </h2>
         <input
@@ -641,29 +645,39 @@ export function UploadForm() {
               )}
             </div>
           )}
+          {(!mobileSubmission || uploadTicket?.status === "WAITING") && (
+            <button type="button" onClick={() => mobileAbortController.current?.abort()}
+              className="focus-ring inline-flex min-h-10 items-center gap-2 rounded-md border px-3 text-sm font-semibold">
+              <Pause className="size-4" />暂停上传
+            </button>
+          )}
         </>
       )}
 
-      <button
-        type="submit"
-        disabled={uploading}
-        className="focus-ring inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3.5 font-semibold text-primary-foreground transition hover:brightness-95 disabled:cursor-wait disabled:opacity-60"
-      >
-        {uploading ? (
-          <Upload className="size-5 animate-pulse" />
-        ) : (
-          <Sparkles className="size-5" />
-        )}
-        {uploading
-          ? uploadTicket?.status === "WAITING"
-            ? "正在排队等待上传"
-            : UPLOAD_COPY.uploadingButton
-          : UPLOAD_COPY.submitButton}
-      </button>
+      {uploadPaused && <p role="status" className="text-sm text-muted-foreground">上传已暂停</p>}
 
-      <p className="text-center text-xs text-muted-foreground">
-        {UPLOAD_COPY.footer}
-      </p>
+      <div className="space-y-7">
+        <button
+          type="submit"
+          disabled={uploading}
+          className="focus-ring inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3.5 font-semibold text-primary-foreground transition hover:brightness-95 disabled:cursor-wait disabled:opacity-60"
+        >
+          {uploading ? (
+            <Upload className="size-5 animate-pulse" />
+          ) : (
+            <Sparkles className="size-5" />
+          )}
+          {uploading
+            ? uploadTicket?.status === "WAITING"
+              ? "正在排队等待上传"
+              : UPLOAD_COPY.uploadingButton
+            : uploadPaused ? "继续上传" : UPLOAD_COPY.submitButton}
+        </button>
+
+        <p className="text-center text-xs text-muted-foreground">
+          {UPLOAD_COPY.footer}
+        </p>
+      </div>
 
       {lyricsWarning && (
         <LyricsOverflowDialog

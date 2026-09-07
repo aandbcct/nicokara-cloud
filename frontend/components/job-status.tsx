@@ -125,17 +125,18 @@ export function JobStatus({ jobId }: { jobId: string }) {
     if (job?.stage !== "READING_REVIEW_REQUIRED") {
       return;
     }
+    const readingJobId = job.id;
     let active = true;
     async function loadReadings() {
       try {
-        const lyrics = await getProcessedLyrics(job.id);
+        const lyrics = await getProcessedLyrics(readingJobId);
         const draft = await loadBrowserReviewDraft<ProcessedLyrics>(
-          job.id,
+          readingJobId,
           "readings",
         );
         if (!active) return;
         setProcessedLyrics(compatibleReadingDraft(lyrics, draft) ?? lyrics);
-        setReadingDraftJobId(job.id);
+        setReadingDraftJobId(readingJobId);
       } catch (reason) {
         if (!active) return;
         setRequestError(
@@ -214,6 +215,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
           : LoaderCircle;
 
   async function handleCancel() {
+    if (!job) return;
     const confirmation =
       job.status === "UPLOADED"
         ? JOB_COPY.cancelQueuedConfirm
@@ -236,7 +238,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
   }
 
   async function handleConfirmReadings() {
-    if (!processedLyrics) return;
+    if (!job || !processedLyrics) return;
     setSubmittingReadings(true);
     setRequestError(null);
     try {
@@ -270,6 +272,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
   }
 
   async function handleReopenReadings() {
+    if (!job) return;
     const confirmed = window.confirm(
       "返回注音确认后，当前时间轴、字幕和视频需要重新生成。是否继续？",
     );
@@ -295,6 +298,7 @@ export function JobStatus({ jobId }: { jobId: string }) {
   }
 
   async function handleRetry() {
+    if (!job) return;
     setRetrying(true);
     setRequestError(null);
     try {

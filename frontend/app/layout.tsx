@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { AnnouncementDialog } from "@/components/announcement-dialog";
 import { PageviewTracker } from "@/components/pageview-tracker";
 import { HOME_COPY } from "@/lib/ui-copy";
+import { THEME_INITIALIZATION_SCRIPT } from "@/lib/theme";
 
 import "./globals.css";
 
@@ -40,8 +41,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN">
+    <html lang="zh-CN" suppressHydrationWarning>
       <body className="min-h-screen">
+        <script dangerouslySetInnerHTML={{ __html: THEME_INITIALIZATION_SCRIPT }} />
         <PageviewTracker />
         {children}
         <AnnouncementDialog />

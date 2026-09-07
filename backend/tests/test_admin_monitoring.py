@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -202,12 +203,12 @@ def test_pageviews_are_persistent_and_admin_overview_reports_traffic(
     )
     assert overview.json()["traffic"] == {
         "tracking_started_at": "2026-07-31T16:00:00+00:00",
-        "pageviews": 9851,
-        "visits": 6394,
+        "pageviews": 10013,
+        "visits": 6468,
         "pageviews_24h": 3,
         "visits_24h": 2,
         "active_visits": 2,
-        "pages_per_visit": 1.54,
+        "pages_per_visit": 1.55,
         "periods": [
             {
                 "key": "cloudflare-2026-08",
@@ -220,11 +221,11 @@ def test_pageviews_are_persistent_and_admin_overview_reports_traffic(
             },
             {
                 "key": "cloudflare-2026-09-partial",
-                "label": "2026 年 9 月 1-4 日",
+                "label": "2026 年 9 月 1-5 日",
                 "started_at": "2026-08-31T16:00:00+00:00",
-                "ended_at": "2026-09-04T06:50:00+00:00",
-                "pageviews": 1128,
-                "visits": 232,
+                "ended_at": "2026-09-05T08:39:00+00:00",
+                "pageviews": 1290,
+                "visits": 306,
                 "source": "Cloudflare Web Analytics PDF",
             },
             {
@@ -240,11 +241,141 @@ def test_pageviews_are_persistent_and_admin_overview_reports_traffic(
     }
     assert [tuple(row) for row in imported_periods] == [
         ("cloudflare-2026-08", 8720, 6160),
-        ("cloudflare-2026-09-partial", 1128, 232),
+        ("cloudflare-2026-09-partial", 1290, 306),
     ]
     assert len(stored_visits) == 2
     assert all(len(row["visit_hash"]) == 64 for row in stored_visits)
     assert all(row["visit_hash"] != first_visit_cookie for row in stored_visits)
+
+
+def test_admin_can_filter_traffic_and_persist_daily_corrections(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(tmp_path)
+
+    with TestClient(create_app(settings, runner=MonitoringRunner())) as client:
+        database = client.app.state.database
+        with database.connect() as connection:
+            connection.executemany(
+                "INSERT INTO pageviews (visit_hash, path, viewed_at) VALUES (?, '/', ?)",
+                [
+                    ("visit-a", "2026-09-06T01:00:00+00:00"),
+                    ("visit-a", "2026-09-06T02:00:00+00:00"),
+                    ("visit-b", "2026-09-06T03:00:00+00:00"),
+                ],
+            )
+
+        initial = client.get(
+            "/api/v1/admin/traffic?date_from=2026-09-01&date_to=2026-09-06",
+            headers=auth_headers(),
+        )
+        updated = client.put(
+            "/api/v1/admin/traffic/daily/2026-09-06",
+            headers=auth_headers(),
+            json={"pageviews": 9, "visits": 4},
+        )
+
+    with TestClient(create_app(settings, runner=MonitoringRunner())) as client:
+        persisted = client.get(
+            "/api/v1/admin/traffic?date_from=2026-09-06&date_to=2026-09-06",
+            headers=auth_headers(),
+        )
+
+    assert initial.status_code == 200
+    assert initial.json()["pageviews"] == 1293
+    assert initial.json()["visits"] == 308
+    assert initial.json()["has_partial_pdf_period"] is False
+    assert updated.status_code == 200
+    assert persisted.status_code == 200
+    assert persisted.json()["pageviews"] == 9
+    assert persisted.json()["visits"] == 4
+    assert persisted.json()["series"] == [
+        {
+            "key": "daily-2026-09-06",
+            "label": "09-06",
+            "started_at": "2026-09-06T00:00:00+08:00",
+            "ended_at": "2026-09-06T23:59:59.999999+08:00",
+            "pageviews": 9,
+            "visits": 4,
+            "source": "管理员修正",
+            "editable": True,
+        }
+    ]
+
+
+def test_admin_daily_traffic_validation_is_safe(tmp_path: Path) -> None:
+    settings = build_settings(tmp_path)
+
+    with TestClient(create_app(settings, runner=MonitoringRunner())) as client:
+        unauthenticated = client.put(
+            "/api/v1/admin/traffic/daily/2026-09-06",
+            json={"pageviews": 10, "visits": 5},
+        )
+        impossible = client.put(
+            "/api/v1/admin/traffic/daily/2026-09-06",
+            headers=auth_headers(),
+            json={"pageviews": 3, "visits": 4},
+        )
+        overlaps_pdf = client.put(
+            "/api/v1/admin/traffic/daily/2026-09-04",
+            headers=auth_headers(),
+            json={"pageviews": 10, "visits": 5},
+        )
+
+    assert unauthenticated.status_code == 401
+    assert impossible.status_code == 422
+    assert overlaps_pdf.status_code == 409
+    assert "Cloudflare PDF" in overlaps_pdf.json()["detail"]
+
+
+def test_existing_september_pdf_baseline_is_upgraded_without_resetting_daily_data(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(tmp_path)
+
+    with TestClient(create_app(settings, runner=MonitoringRunner())) as client:
+        database = client.app.state.database
+        database.upsert_daily_traffic(
+            day=date(2026, 9, 6),
+            pageviews=12,
+            visits=5,
+        )
+        with database.connect() as connection:
+            connection.execute(
+                """
+                UPDATE analytics_imports
+                SET label = '2026 年 9 月 1-4 日',
+                    period_end = '2026-09-04T06:50:00+00:00',
+                    pageviews = 1128,
+                    visits = 232
+                WHERE source_key = 'cloudflare-2026-09-partial'
+                """
+            )
+
+    with TestClient(create_app(settings, runner=MonitoringRunner())) as client:
+        database = client.app.state.database
+        with database.connect() as connection:
+            september = connection.execute(
+                """
+                SELECT label, period_end, pageviews, visits
+                FROM analytics_imports
+                WHERE source_key = 'cloudflare-2026-09-partial'
+                """
+            ).fetchone()
+            daily = connection.execute(
+                """
+                SELECT pageviews, visits FROM analytics_daily_overrides
+                WHERE day = '2026-09-06'
+                """
+            ).fetchone()
+
+    assert tuple(september) == (
+        "2026 年 9 月 1-5 日",
+        "2026-09-05T08:39:00+00:00",
+        1290,
+        306,
+    )
+    assert tuple(daily) == (12, 5)
 
 
 def test_admin_can_cancel_upload_and_requeue_failed_job_with_audit(

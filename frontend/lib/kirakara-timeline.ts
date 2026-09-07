@@ -25,6 +25,7 @@ export type CloudAlignedLine = {
 };
 
 export type CloudLyricTimeline = {
+  source_revision?: string;
   confidence: number;
   lines: CloudAlignedLine[];
   warnings: string[];
@@ -55,6 +56,7 @@ export type KirakaraRenderUnit = {
 };
 
 export type KirakaraLine = {
+  confidence?: number;
   text: string;
   reading: string;
   startMs: number;
@@ -63,6 +65,8 @@ export type KirakaraLine = {
 };
 
 export type KirakaraTimeline = {
+  sourceRevision?: string;
+  baseSavedAt?: string | null;
   confidence: number;
   warnings: string[];
   durationMs: number;
@@ -370,7 +374,7 @@ export function toKirakaraTimeline(source: CloudLyricTimeline): KirakaraTimeline
       sourceDuration > 0 ? sourceDuration : COLLAPSED_LINE_DURATION_MS
     );
     const shiftMs = startMs - sourceLineRange.startMs;
-    let units = line.tokens.map((token) => {
+    let units: KirakaraRenderUnit[] = line.tokens.map((token) => {
       const tokenRange = normalizedRange(token.start_ms, token.end_ms);
       return {
         text: token.surface,
@@ -395,6 +399,7 @@ export function toKirakaraTimeline(source: CloudLyricTimeline): KirakaraTimeline
       units = repairCollapsedVoicedUnits(units);
     }
     const normalized = closeLineMoraGaps({
+      confidence: line.confidence,
       text: line.surface,
       reading: line.reading,
       startMs,
@@ -407,6 +412,7 @@ export function toKirakaraTimeline(source: CloudLyricTimeline): KirakaraTimeline
 
   return {
     confidence: source.confidence,
+    ...(source.source_revision ? { sourceRevision: source.source_revision } : {}),
     warnings: [...source.warnings],
     durationMs: lines.reduce((latest, line) => Math.max(latest, line.endMs), 0),
     lines,

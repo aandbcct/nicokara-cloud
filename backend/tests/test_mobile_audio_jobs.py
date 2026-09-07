@@ -579,6 +579,9 @@ def test_audio_job_can_enter_cloud_render_queue_with_reviewed_timeline(
                             "color_before": "#fefefe",
                             "color_after": "#123456",
                         },
+                        "source_revision": client.get(
+                            f"/api/v1/jobs/{job_id}/timeline"
+                        ).json()["source_revision"],
                     },
                     ensure_ascii=False,
                 )
@@ -595,11 +598,12 @@ def test_audio_job_can_enter_cloud_render_queue_with_reviewed_timeline(
         job = client.app.state.database.get_job(job_id)
         assert job is not None
         assert Path(job["video_path"]).read_bytes() == video
-        assert json.loads(timeline_path.read_text(encoding="utf-8"))["lines"][0][
+        assert json.loads(Path(job["timeline_path"]).read_text(encoding="utf-8"))["lines"][0][
             "reading"
         ] == "こんにち"
-        assert (job_dir / "kirakara.ass").exists()
-        ass_content = (job_dir / "kirakara.ass").read_text(
+        assert json.loads(timeline_path.read_text(encoding="utf-8"))["lines"][0]["reading"] == "きょう"
+        assert Path(job["ass_path"]).exists()
+        ass_content = Path(job["ass_path"]).read_text(
             encoding="utf-8-sig"
         )
         assert "Style: KirakaraBase,Yu Gothic,108" in ass_content

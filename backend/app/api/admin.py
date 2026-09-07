@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from hmac import compare_digest
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -10,12 +10,15 @@ from app.api.jobs import refresh_upload_queue
 from app.core.monitoring import collect_system_resources
 from app.schemas.admin import (
     AdminActionResponse,
+    AdminDailyTrafficRequest,
     AdminLogsResponse,
     AdminJobTimelineResponse,
     AdminOverviewResponse,
     AdminQueueHealthResponse,
+    AdminTrafficReportResponse,
 )
 from app.services.chunked_uploads import remove_chunked_upload
+from app.tasks.runner import QueueCapacityError
 
 
 router = APIRouter(prefix="/admin", tags=["admin monitoring"])
@@ -144,6 +147,65 @@ def queue_health(request: Request) -> JSONResponse:
     return JSONResponse(
         status_code=200 if runner["healthy"] else 503,
         content=payload.model_dump(),
+    )
+
+
+@router.get(
+    "/traffic",
+    response_model=AdminTrafficReportResponse,
+    dependencies=[Depends(require_admin)],
+)
+def traffic_report(
+    request: Request,
+    date_from: date = Query(),
+    date_to: date = Query(),
+) -> AdminTrafficReportResponse:
+    if date_from > date_to:
+        raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期。")
+    if (date_to - date_from).days > 366:
+        raise HTTPException(status_code=422, detail="单次最多查看 366 天的数据。")
+    return AdminTrafficReportResponse(
+        **request.app.state.database.traffic_report(
+            date_from=date_from,
+            date_to=date_to,
+        )
+    )
+
+
+@router.put(
+    "/traffic/daily/{day}",
+    response_model=AdminTrafficReportResponse,
+    dependencies=[Depends(require_admin)],
+)
+def update_daily_traffic(
+    request: Request,
+    day: date,
+    payload: AdminDailyTrafficRequest,
+) -> AdminTrafficReportResponse:
+    try:
+        request.app.state.database.upsert_daily_traffic(
+            day=day,
+            pageviews=payload.pageviews,
+            visits=payload.visits,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="该日期仍属于 Cloudflare PDF 历史汇总区间，不能按日覆盖。",
+        ) from exc
+    _audit(
+        request,
+        action="traffic.daily.update",
+        target_type="analytics_day",
+        target_id=day.isoformat(),
+        outcome="succeeded",
+        details=f"pageviews={payload.pageviews}, visits={payload.visits}",
+    )
+    return AdminTrafficReportResponse(
+        **request.app.state.database.traffic_report(
+            date_from=day,
+            date_to=day,
+        )
     )
 
 
@@ -285,6 +347,8 @@ async def requeue_job(request: Request, job_id: str) -> AdminActionResponse:
     if callable(enqueue):
         try:
             await enqueue(job_id)
+        except QueueCapacityError:
+            pass  # The persistent dispatcher will schedule this accepted job.
         except Exception as exc:
             database.update_job_state(
                 job_id,

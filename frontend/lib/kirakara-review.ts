@@ -10,6 +10,8 @@ import {
 import { kirakaraStylePayload, type KirakaraStyle } from "./kirakara-style";
 
 export type TimelineReviewPayload = {
+  source_revision?: string;
+  base_saved_at?: string | null;
   lines: Array<{
     start_ms: number;
     end_ms: number;
@@ -514,6 +516,7 @@ export function timelineReviewPayload(
   style?: KirakaraStyle,
 ): TimelineReviewPayload {
   const payload: TimelineReviewPayload = {
+    ...(timeline.sourceRevision ? { source_revision: timeline.sourceRevision } : {}),
     lines: timeline.lines.map((sourceLine) => {
       const line = closeLineMoraGaps(sourceLine);
       return {

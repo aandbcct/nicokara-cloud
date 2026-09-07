@@ -25,6 +25,8 @@ from app.core.config import Settings
 from app.core.database import Database
 from app.core.event_logging import exception_details
 from app.core.rate_limit import resolve_client_key
+from app.core.resource_limits import ResourceCapacityError
+from app.tasks.runner import QueueCapacityError
 from app.schemas.jobs import (
     JobResponse,
     ReadingReviewRequest,
@@ -40,11 +42,13 @@ from app.services.chunked_uploads import (
     missing_chunk_indices,
     read_chunked_upload_metadata,
     received_chunk_count,
+    received_chunk_indices,
     remove_chunked_upload,
     save_upload_chunk,
     start_chunked_upload,
 )
 from app.services.uploads import save_lyrics, save_mp4
+from app.services.review_drafts import read_matching_draft, timeline_source_revision
 from app.services.reviewed_artifacts import (
     ensure_lyrics_source_from_reviewed_artifacts,
     save_reviewed_artifacts,
@@ -158,6 +162,8 @@ async def enqueue_created_job(request: Request, job_id: str) -> None:
         return
     try:
         await enqueue(job_id)
+    except QueueCapacityError:
+        logger.info("Job %s retained in the persistent queue until capacity is available", job_id)
     except Exception as exc:
         safe_error = exception_details(exc, include_traceback=False)
         logger.error(
@@ -193,6 +199,11 @@ def create_upload_ticket(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Client submission already created a job.",
             )
+        existing_ticket = database.get_active_upload_by_submission(client_submission_id)
+        if existing_ticket is not None:
+            if existing_ticket["video_name"] != original_name or existing_ticket["video_size_bytes"] != payload.video_size_bytes:
+                raise HTTPException(status_code=409, detail="上传文件与已存在的会话不一致")
+            return upload_ticket_response(database, existing_ticket)
     if Path(original_name).suffix.lower() != ".mp4":
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
@@ -221,13 +232,16 @@ def create_upload_ticket(
             headers={"Retry-After": "60"},
         )
 
-    ticket = database.create_upload_ticket(
-        ticket_id=str(uuid4()),
-        client_key=client_key,
-        video_name=original_name,
-        video_size_bytes=payload.video_size_bytes,
-        client_submission_id=client_submission_id,
-    )
+    try:
+        ticket = database.create_upload_ticket(
+            ticket_id=str(uuid4()),
+            client_key=client_key,
+            video_name=original_name,
+            video_size_bytes=payload.video_size_bytes,
+            client_submission_id=client_submission_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="上传会话状态或文件信息已变化，请重新确认。") from exc
     refresh_upload_queue(settings, database)
     refreshed = database.get_upload_ticket(ticket["id"]) or ticket
     queue_position, queue_size = database.upload_ticket_metrics(ticket["id"])
@@ -342,6 +356,11 @@ def start_upload_chunks(
                 settings.storage_dir,
                 ticket_id,
             )
+            expected = payload.model_dump()
+            expected["video_name"] = safe_display_name(payload.video_name)
+            if any(metadata.get(key) != value for key, value in expected.items()):
+                raise HTTPException(status_code=409, detail="上传分片信息与已存在的会话不一致")
+            database.touch_uploading_ticket(ticket_id)
             return UploadChunkSessionResponse(
                 ticket_id=ticket_id,
                 status=ticket["status"],
@@ -351,6 +370,8 @@ def start_upload_chunks(
                     settings.storage_dir,
                     ticket_id,
                 ),
+                received_chunk_indices=received_chunk_indices(settings.storage_dir, ticket_id),
+                missing_chunk_indices=missing_chunk_indices(settings.storage_dir, ticket_id),
             )
         status_code = (
             status.HTTP_409_CONFLICT
@@ -419,6 +440,8 @@ def start_upload_chunks(
         chunk_size_bytes=int(metadata["chunk_size_bytes"]),
         total_chunks=int(metadata["total_chunks"]),
         received_chunks=0,
+        received_chunk_indices=[],
+        missing_chunk_indices=list(range(int(metadata["total_chunks"]))),
     )
 
 
@@ -558,7 +581,7 @@ async def complete_upload_chunks(
         )
 
     try:
-        acquire_completion_lock(settings.storage_dir, ticket_id)
+        completion_lock = acquire_completion_lock(settings.storage_dir, ticket_id)
     except HTTPException:
         if lyrics_file:
             await lyrics_file.close()
@@ -663,6 +686,11 @@ async def complete_upload_chunks(
                     "vocal_mode": vocal_mode,
                 },
             )
+    except ResourceCapacityError:
+        if created:
+            database.delete_job(job_id)
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise
     except Exception as exc:
         if event_logger is not None:
             event_logger.emit(
@@ -683,6 +711,8 @@ async def complete_upload_chunks(
         refresh_upload_queue(settings, database)
         shutil.rmtree(job_dir, ignore_errors=True)
         raise
+    finally:
+        completion_lock.unlink(missing_ok=True)
     current_job = database.get_job(job_id) or job
     return job_response(database, current_job)
 
@@ -1035,6 +1065,8 @@ async def retry_failed_job(request: Request, job_id: str) -> JobResponse:
     if enqueue is not None:
         try:
             await enqueue(job_id)
+        except QueueCapacityError:
+            logger.info("Retried job %s is waiting for queue capacity", job_id)
         except Exception as exc:
             safe_error = exception_details(exc, include_traceback=False)
             logger.error(
@@ -1357,8 +1389,8 @@ def reopen_reading_review(request: Request, job_id: str) -> JobResponse:
     return job_response(database, reopened)
 
 
-@router.get("/{job_id}/timeline", response_class=FileResponse)
-def get_timeline(request: Request, job_id: str) -> FileResponse:
+@router.get("/{job_id}/timeline", response_class=Response)
+def get_timeline(request: Request, job_id: str) -> Response:
     try:
         UUID(job_id)
     except ValueError as exc:
@@ -1387,10 +1419,16 @@ def get_timeline(request: Request, job_id: str) -> FileResponse:
             status_code=status.HTTP_410_GONE,
             detail="歌词时间轴文件不存在",
         )
-    return FileResponse(
-        timeline_path,
+    content = timeline_path.read_bytes()
+    timeline = json.loads(content)
+    timeline["source_revision"] = timeline_source_revision(job, content)
+    return Response(
+        content=json.dumps(timeline, ensure_ascii=False),
         media_type="application/json",
-        filename="timeline.json",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": 'attachment; filename="timeline.json"',
+        },
     )
 
 
@@ -1424,13 +1462,17 @@ def get_timeline_review(request: Request, job_id: str) -> Response:
 
     timeline_path = validated_job_file(settings, job_id, timeline_path_value)
     try:
-        draft = json.loads(draft_path.read_text(encoding="utf-8"))
+        source_content = timeline_path.read_bytes()
+        revision = timeline_source_revision(job, source_content)
+        draft = read_matching_draft(draft_path, revision)
+        if draft is None:
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
         review = draft["review"]
         saved_at = str(draft["saved_at"])
         if not isinstance(review, dict) or not saved_at:
             raise TypeError("timeline review draft shape is invalid")
         source_timeline = lyric_timeline_from_dict(
-            json.loads(timeline_path.read_text(encoding="utf-8"))
+            json.loads(source_content)
         )
         reviewed_timeline = apply_timeline_review(source_timeline, review)
     except TimelineReviewError as exc:
@@ -1447,7 +1489,7 @@ def get_timeline_review(request: Request, job_id: str) -> Response:
     return Response(
         content=json.dumps(
             {
-                "timeline": reviewed_timeline.to_dict(),
+                "timeline": {**reviewed_timeline.to_dict(), "source_revision": revision},
                 "saved_at": saved_at,
             },
             ensure_ascii=False,
@@ -1472,53 +1514,51 @@ def save_timeline_review(
         ) from exc
 
     settings, database = services(request)
-    job = database.get_job(job_id)
-    if job is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="任务不存在",
-        )
-    timeline_path_value = job.get("timeline_path")
-    if not timeline_path_value:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="歌词时间轴尚未完成",
-        )
-    timeline_path = validated_job_file(settings, job_id, timeline_path_value)
-
-    try:
-        source_timeline = lyric_timeline_from_dict(
-            json.loads(timeline_path.read_text(encoding="utf-8"))
-        )
-        reviewed_timeline = apply_timeline_review(source_timeline, review)
-    except (json.JSONDecodeError, TimelineReviewError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"时间轴校正数据无效：{exc}",
-        ) from exc
-
-    saved_at = datetime.now(UTC).isoformat()
     job_dir = settings.storage_dir / job_id
     draft_path = job_dir / TIMELINE_REVIEW_DRAFT_FILENAME
     temporary_path = job_dir / f".{TIMELINE_REVIEW_DRAFT_FILENAME}.{uuid4().hex}.tmp"
-    try:
-        temporary_path.write_text(
-            json.dumps(
-                {"saved_at": saved_at, "review": review},
-                ensure_ascii=False,
-                indent=2,
+    with database.locked_job(job_id) as job:
+        if job is None:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        if not job.get("timeline_path") or job["status"] not in {
+            "ALIGNED", "SUBTITLE_GENERATED", "COMPLETED",
+        }:
+            raise HTTPException(status_code=409, detail="任务状态已变化，请刷新页面后重试。")
+        timeline_path = validated_job_file(settings, job_id, job["timeline_path"])
+        source_content = timeline_path.read_bytes()
+        revision = timeline_source_revision(job, source_content)
+        if review.get("source_revision") != revision:
+            raise HTTPException(status_code=409, detail="时间轴已重新生成，请刷新页面后继续编辑。")
+        try:
+            previous = read_matching_draft(draft_path, revision)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail="云端时间轴草稿无法读取") from exc
+        if review.get("base_saved_at") != (previous["saved_at"] if previous else None):
+            raise HTTPException(status_code=409, detail="云端草稿已在其他页面更新，请刷新后继续编辑。")
+        try:
+            source_timeline = lyric_timeline_from_dict(json.loads(source_content))
+            reviewed_timeline = apply_timeline_review(source_timeline, review)
+        except (json.JSONDecodeError, TimelineReviewError) as exc:
+            raise HTTPException(
+                status_code=422, detail=f"时间轴校正数据无效：{exc}",
+            ) from exc
+        saved_at = datetime.now(UTC).isoformat()
+        try:
+            temporary_path.write_text(
+                json.dumps(
+                    {"saved_at": saved_at, "source_revision": revision, "review": review},
+                    ensure_ascii=False, indent=2,
+                ) + "\n",
+                encoding="utf-8",
             )
-            + "\n",
-            encoding="utf-8",
-        )
-        temporary_path.replace(draft_path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
+            temporary_path.replace(draft_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     return Response(
         content=json.dumps(
             {
-                "timeline": reviewed_timeline.to_dict(),
+                "timeline": {**reviewed_timeline.to_dict(), "source_revision": revision},
                 "saved_at": saved_at,
             },
             ensure_ascii=False,

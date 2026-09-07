@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 import {
   normalizeKirakaraStyle,
@@ -201,7 +201,7 @@ function TextMask({
   );
   const leftClip = percentage <= 0 ? "100%" : `-${safePad}px`;
   const rightClip = 100 - percentage;
-  const baseStyle = {
+  const baseStyle: CSSProperties = {
     display: "inline-block",
     padding: `${safePad}px`,
     fontFamily,

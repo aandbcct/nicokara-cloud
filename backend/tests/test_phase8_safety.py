@@ -234,6 +234,9 @@ def test_restart_eventually_requeues_every_uploaded_job(
 
         def process(self, job_id: str) -> None:
             self.job_ids.append(job_id)
+            database.update_job_state(
+                job_id, status="COMPLETED", stage="VIDEO_RENDERING_COMPLETE", progress=100,
+            )
             if len(self.job_ids) == 3:
                 self.completed.set()
 

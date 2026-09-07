@@ -75,6 +75,8 @@ class UploadChunkSessionResponse(BaseModel):
     chunk_size_bytes: int
     total_chunks: int
     received_chunks: int
+    received_chunk_indices: list[int] = Field(default_factory=list)
+    missing_chunk_indices: list[int] = Field(default_factory=list)
 
 
 class UploadChunkResponse(BaseModel):

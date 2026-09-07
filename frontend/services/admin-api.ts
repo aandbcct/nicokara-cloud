@@ -1,9 +1,11 @@
 import type {
   AdminAction,
+  AdminDailyTrafficInput,
   AdminLogFilters,
   AdminLogsResponse,
   AdminJobTimelineResponse,
   AdminTimelineFilters,
+  AdminTrafficReport,
   AdminOverview,
 } from "@/types/admin";
 
@@ -65,6 +67,39 @@ async function adminRequest<T>(
 
 export function getAdminOverview(token: string): Promise<AdminOverview> {
   return adminRequest<AdminOverview>(token, "/admin/overview");
+}
+
+
+export function getAdminTraffic(
+  token: string,
+  dateFrom: string,
+  dateTo: string,
+): Promise<AdminTrafficReport> {
+  const search = new URLSearchParams({
+    date_from: dateFrom,
+    date_to: dateTo,
+  });
+  return adminRequest<AdminTrafficReport>(
+    token,
+    `/admin/traffic?${search.toString()}`,
+  );
+}
+
+
+export function updateAdminDailyTraffic(
+  token: string,
+  day: string,
+  input: AdminDailyTrafficInput,
+): Promise<AdminTrafficReport> {
+  return adminRequest<AdminTrafficReport>(
+    token,
+    `/admin/traffic/daily/${encodeURIComponent(day)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 

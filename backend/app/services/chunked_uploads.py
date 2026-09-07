@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile, status
+from app.core.resource_limits import check_disk_space
 
 from app.services.uploads import (
     CHUNK_SIZE,
@@ -244,6 +245,7 @@ async def save_upload_chunk(
                         status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                         detail="Upload chunk is too large.",
                     )
+                check_disk_space(destination.parent, len(data))
                 output.write(data)
         if total != expected_size:
             raise HTTPException(
@@ -297,6 +299,7 @@ def assemble_chunked_mp4(
                         if len(header) < 32:
                             header.extend(data[: 32 - len(header)])
                         digest.update(data)
+                        check_disk_space(destination.parent, len(data))
                         output.write(data)
 
         if total == 0:
@@ -354,6 +357,7 @@ def assemble_chunked_audio(
                         if len(header) < 32:
                             header.extend(data[: 32 - len(header)])
                         digest.update(data)
+                        check_disk_space(destination.parent, len(data))
                         output.write(data)
         if total == 0:
             raise HTTPException(

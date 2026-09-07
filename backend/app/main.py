@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.jobs import router as jobs_router
 from app.api.jobs import upload_tickets_router
@@ -25,6 +26,9 @@ from app.alignment.mms import MMSForcedAligner, SubprocessMMSRuntime
 from app.core.active_jobs import ActiveJobLimiter
 from app.core.config import Settings, get_settings
 from app.core.database import Database
+from app.core.resource_limits import (
+    ResourceCapacityError, ResourcePolicy, UploadStorageMiddleware, storage_write_context,
+)
 from app.core.event_logging import StructuredEventLogger, event_context, exception_details
 from app.core.runtime import validate_processing_runtime
 from app.core.worker_config import (
@@ -38,7 +42,7 @@ from app.lyrics.processor import (
     ReviewedLyricProcessor,
 )
 from app.tasks.pipeline import TranscriptionPipeline
-from app.tasks.runner import LocalTaskRunner
+from app.tasks.runner import LocalTaskRunner, dispatch_pending_jobs
 from app.tasks.cleanup import JobCleanupService, PeriodicCleanupRunner
 from app.subtitle.kirakara_generator import KirakaraAssGenerator
 from app.video.audio import FFmpegAudioExtractor
@@ -162,6 +166,7 @@ def create_app(
             validate_processing_runtime(resolved_settings)
         resolved_settings.prepare_directories()
         database = Database(resolved_settings.database_path)
+        database.resource_policy = ResourcePolicy(resolved_settings)
         database.initialize()
         event_logger = StructuredEventLogger(
             database=database,
@@ -224,6 +229,7 @@ def create_app(
                     resolved_settings.worker_heartbeat_interval_seconds
                 ),
                 event_logger=event_logger,
+                shutdown_timeout_seconds=resolved_settings.shutdown_timeout_seconds,
             )
             worker_config_reloader = WorkerConfigReloader(
                 path=resolved_settings.worker_config_path,
@@ -250,7 +256,9 @@ def create_app(
             pending_job_ids = database.list_job_ids(status="UPLOADED")
             recovery_task = None
             enqueue_wait = getattr(active_runner, "enqueue_wait", None)
-            if enqueue_wait is not None:
+            if isinstance(active_runner, LocalTaskRunner):
+                recovery_task = asyncio.create_task(dispatch_pending_jobs(database, active_runner))
+            elif enqueue_wait is not None:
                 async def recover_pending_jobs() -> None:
                     for pending_job_id in pending_job_ids:
                         event_logger.emit(
@@ -302,13 +310,19 @@ def create_app(
         version="0.3.0-alpha.3",
         lifespan=lifespan,
     )
+    app.add_middleware(UploadStorageMiddleware, settings=resolved_settings)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=resolved_settings.cors_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PUT"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(ResourceCapacityError)
+    async def resource_capacity_error(request, exc):
+        return JSONResponse(status_code=503, content={"detail": str(exc)},
+                            headers={"Retry-After": "60"})
 
     @app.middleware("http")
     async def security_headers(request, call_next):
@@ -365,7 +379,11 @@ def create_app(
                 )
                 is not None
             )
-            or path in {"/api/v1/admin/overview", "/api/v1/admin/logs"}
+            or path in {
+                "/api/v1/admin/overview",
+                "/api/v1/admin/logs",
+                "/api/v1/admin/traffic",
+            }
             or path == "/api/v1/analytics/pageview"
             or (
                 method == "GET"
@@ -375,7 +393,7 @@ def create_app(
         )
         event_logger = getattr(app.state, "event_logger", None)
         started = time.perf_counter()
-        with event_context(request_id=request_id, component="fastapi"):
+        with event_context(request_id=request_id, component="fastapi"), storage_write_context(resolved_settings.min_free_disk_bytes):
             if event_logger is not None and not suppress_event:
                 event_logger.emit(
                     event="request.started",

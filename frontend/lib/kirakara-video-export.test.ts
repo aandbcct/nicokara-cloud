@@ -51,7 +51,7 @@ const profile = {
   bitrate: 4_000_000,
 };
 
-function mp4Box(type: string): Uint8Array {
+function mp4Box(type: string): Uint8Array<ArrayBuffer> {
   const box = new Uint8Array(8);
   new DataView(box.buffer).setUint32(0, box.byteLength);
   [...type].forEach((character, index) => {
@@ -125,6 +125,8 @@ describe("paintKirakaraVideoFrame", () => {
       fillStyle: "",
       strokeStyle: "",
       lineWidth: 0,
+      lineJoin: "round" as CanvasLineJoin,
+      miterLimit: 2,
       font: "",
       textBaseline: "alphabetic" as CanvasTextBaseline,
     };

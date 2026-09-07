@@ -270,6 +270,11 @@ docker compose up --build
 无需重启容器。全站公告位于 `frontend/public/announcement.json`；修改内容后刷新页面
 即可生效，设置 `enabled` 为 `false` 可关闭公告。
 
+后端默认最多保留 4 个内存等待任务、32 个已排队或正在处理的任务，以及 32 个上传会话，
+并保留至少 2 GB 空闲磁盘。内存队列已满时，已接收任务留在数据库中等待调度。
+资源限制和停止超时的配置见 [部署说明](./DEPLOYMENT_LOCAL_BUILD.md#7-systemd)；
+对齐结果的可重复检查见 [对齐基准](./ALIGNMENT_BENCHMARK.md)。
+
 ### 第 6 步：完成第一次测试
 
 1. 准备一个较短的 MP4 视频，建议首次测试控制在 1 分钟以内。

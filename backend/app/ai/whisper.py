@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from app.core.processing_control import check_interrupted
 from typing import Any, Callable
 
 
@@ -106,6 +107,7 @@ class FasterWhisperTranscriber:
         return self._model
 
     def transcribe(self, audio_path: Path) -> TranscriptDocument:
+        check_interrupted()
         raw_segments, info = self.model.transcribe(
             str(audio_path),
             language="ja",
@@ -116,6 +118,7 @@ class FasterWhisperTranscriber:
         )
         segments: list[TranscriptSegment] = []
         for raw_segment in raw_segments:
+            check_interrupted()
             words = [
                 TranscriptWord(
                     text=word.word.strip(),

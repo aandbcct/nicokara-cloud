@@ -135,5 +135,9 @@ describe("admin monitor", () => {
     expect(html).toContain("Visits summary");
     expect(html).toContain("Cloudflare 历史数据");
     expect(html).toContain('data-traffic-period="cloudflare-2026-08"');
+    expect(html).toContain("收起访问分析");
+    expect(html).toContain("选择分析时间段");
+    expect(html).toContain("访问趋势图");
+    expect(html).toContain("修改每日数据");
   });
 });

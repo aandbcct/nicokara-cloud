@@ -13,6 +13,7 @@ from typing import Any
 from pykakasi import kakasi
 
 from app.ai.whisper import TranscriptDocument
+from app.core.processing_control import check_interrupted, run_process
 from app.alignment.japanese import normalize_reading, split_moras
 from app.alignment.models import (
     AlignedLine,
@@ -65,7 +66,7 @@ class SubprocessMMSRuntime:
         self,
         *,
         device: str = "auto",
-        runner: Any = subprocess.run,
+        runner: Any = run_process,
         python_command: str = sys.executable,
         audio_speed: float = 1.0,
         silence_window_seconds: float = 0.8,
@@ -123,7 +124,10 @@ class SubprocessMMSRuntime:
             self.device,
         ]
         try:
-            with self.limiter:
+            while not self.limiter.acquire(timeout=0.1):
+                check_interrupted()
+            try:
+                check_interrupted()
                 self.runner(
                     command,
                     timeout=timeout_seconds,
@@ -131,6 +135,8 @@ class SubprocessMMSRuntime:
                     capture_output=True,
                     text=True,
                 )
+            finally:
+                self.limiter.release()
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             return [
                 MMSMoraSpan(

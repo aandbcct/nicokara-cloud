@@ -24,7 +24,7 @@ describe("KirakaraRenderActions", () => {
   it("offers cloud export as a discouraged alternative when browser export is supported", () => {
     const html = renderToStaticMarkup(
       <KirakaraRenderActions
-        capabilities={{ supported: true, export: true, profile, reasons: [] }}
+        capabilities={{ preview: true, export: true, profile }}
         video={video}
         timeline={timeline}
         style={DEFAULT_KIRAKARA_STYLE}
@@ -41,7 +41,7 @@ describe("KirakaraRenderActions", () => {
   it("shows only cloud rendering when browser export is unsupported", () => {
     const html = renderToStaticMarkup(
       <KirakaraRenderActions
-        capabilities={{ supported: true, export: false, profile: null, reasons: [] }}
+        capabilities={{ preview: true, export: false, profile: null }}
         video={video}
         timeline={timeline}
         style={DEFAULT_KIRAKARA_STYLE}

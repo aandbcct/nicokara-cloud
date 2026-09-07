@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import errno
 import logging
 import re
+import subprocess
 import time
 import traceback
 from datetime import UTC, datetime
@@ -116,26 +118,78 @@ def sanitize_details(value: Any, *, key: str = "") -> Any:
     return _truncate(text)
 
 
+def _exception_summary(error: BaseException) -> str:
+    # Subprocess exception strings embed the unredacted command arguments.
+    if isinstance(error, subprocess.TimeoutExpired):
+        return f"External process timed out after {error.timeout} seconds."
+    if isinstance(error, subprocess.CalledProcessError):
+        return f"External process exited with code {error.returncode}."
+    return _truncate(str(error).strip() or type(error).__name__, 1_000)
+
+
 def exception_details(error: BaseException, *, include_traceback: bool = True) -> dict[str, Any]:
+    # Follow explicit causes (or unsuppressed context), bounding cyclic chains.
+    chain: list[BaseException] = []
+    current: BaseException | None = error
+    while current is not None and all(current is not item for item in chain) and len(chain) < 8:
+        chain.append(current)
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    root = chain[-1]
     details: dict[str, Any] = {
         "exception_type": type(error).__name__,
-        "error_summary": _truncate(str(error), 1_000),
+        "error_summary": _exception_summary(error),
+        "root_cause": {
+            "exception_type": type(root).__name__,
+            "error_summary": _exception_summary(root),
+        },
+        "exception_chain": [
+            {"exception_type": type(item).__name__,
+             "error_summary": _exception_summary(item)}
+            for item in chain
+        ],
     }
     if include_traceback:
+        trace = "".join(traceback.format_exception(error))
+        for item in chain:
+            if isinstance(item, (subprocess.TimeoutExpired, subprocess.CalledProcessError)):
+                trace = trace.replace(str(item), _exception_summary(item))
         details["traceback"] = _truncate(
-            "".join(traceback.format_exception(error)),
+            trace,
             MAX_DETAIL_TEXT,
         )
-    for attribute in (
-        "exit_code",
-        "timeout_seconds",
-        "stderr_tail",
-        "stdout_tail",
-        "command",
-    ):
-        value = getattr(error, attribute, None)
-        if value is not None:
-            details[attribute] = value
+    aliases = {
+        "exit_code": ("exit_code", "returncode"),
+        "timeout_seconds": ("timeout_seconds", "timeout"),
+        "stderr_tail": ("stderr_tail", "stderr"),
+        "stdout_tail": ("stdout_tail", "stdout"),
+        "command": ("command", "cmd"),
+    }
+    for attribute, names in aliases.items():
+        for item in reversed(chain):
+            value = next((getattr(item, name) for name in names if getattr(item, name, None) is not None), None)
+            if value is not None:
+                details[attribute] = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+                break
+    diagnostic_code = "UNKNOWN"
+    if isinstance(root, (TimeoutError, subprocess.TimeoutExpired)):
+        diagnostic_code = "TIMEOUT"
+    elif isinstance(root, MemoryError) or getattr(root, "errno", None) == errno.ENOMEM:
+        diagnostic_code = "OUT_OF_MEMORY"
+    elif isinstance(root, OSError) and root.errno == errno.ENOSPC:
+        diagnostic_code = "DISK_FULL"
+    elif isinstance(root, PermissionError):
+        diagnostic_code = "PERMISSION_DENIED"
+    elif isinstance(root, FileNotFoundError):
+        diagnostic_code = "FILE_NOT_FOUND"
+    elif isinstance(root, ImportError):
+        diagnostic_code = "DEPENDENCY_MISSING"
+    elif isinstance(root, ConnectionError):
+        diagnostic_code = "CONNECTION_FAILED"
+    elif isinstance(root, subprocess.CalledProcessError) or details.get("exit_code") is not None:
+        diagnostic_code = "PROCESS_FAILED"
+    details["diagnostic_code"] = diagnostic_code
     return sanitize_details(details)
 
 

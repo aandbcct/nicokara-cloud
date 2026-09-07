@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from math import isfinite
 from pathlib import Path
 
 from pydantic import Field, SecretStr, field_validator
@@ -34,6 +35,10 @@ class Settings(BaseSettings):
     max_audio_bytes: int = 256 * 1024 * 1024
     max_lyrics_bytes: int = 1024 * 1024
     max_pending_jobs: int = 4
+    max_active_jobs: int = 32
+    max_upload_sessions: int = 32
+    min_free_disk_bytes: int = 2 * 1024 * 1024 * 1024
+    shutdown_timeout_seconds: float = 30
     max_active_jobs_per_client: int = 2
     max_upload_slots: int = 1
     upload_ticket_timeout_seconds: int = 120
@@ -94,6 +99,10 @@ class Settings(BaseSettings):
         "max_audio_bytes",
         "max_lyrics_bytes",
         "max_pending_jobs",
+        "max_active_jobs",
+        "max_upload_sessions",
+        "min_free_disk_bytes",
+        "ffmpeg_timeout_seconds",
         "max_active_jobs_per_client",
         "max_upload_slots",
         "upload_ticket_timeout_seconds",
@@ -114,6 +123,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "worker_heartbeat_interval_seconds",
+        "shutdown_timeout_seconds",
         "fa_kara_audio_speed",
         "fa_kara_silence_window_seconds",
         "fa_kara_silence_threshold_ratio",
@@ -122,7 +132,7 @@ class Settings(BaseSettings):
     )
     @classmethod
     def positive_heartbeat_interval(cls, value: float) -> float:
-        if value <= 0:
+        if not isfinite(value) or value <= 0:
             raise ValueError("must be greater than zero")
         return value
 

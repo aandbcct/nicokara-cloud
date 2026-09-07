@@ -61,6 +61,22 @@ const timeline: KirakaraTimeline = {
 };
 
 describe("ReviewDraftStore", () => {
+  it("rejects drafts from a previous generation even when the lines match", () => {
+    const source = { ...timeline, sourceRevision: "generation-2" };
+    const oldDraft = { ...timeline, sourceRevision: "generation-1" };
+    expect(compatibleTimelineDraft(source, oldDraft)).toBeNull();
+    expect(compatibleTimelineDraft(source, timeline)).toBeNull();
+  });
+
+  it("restores local edits only when they are based on the current cloud draft", () => {
+    const source = { ...timeline, sourceRevision: "generation-1" };
+    const draft = { ...source, baseSavedAt: "2026-09-07T10:00:00Z" };
+    expect(compatibleTimelineDraft(source, draft, "2026-09-07T11:00:00Z")).toBeNull();
+    expect(compatibleTimelineDraft(source, draft, draft.baseSavedAt)).toEqual(draft);
+    expect(compatibleTimelineDraft(source, { ...draft, baseSavedAt: null }, null))
+      .toEqual({ ...draft, baseSavedAt: null });
+  });
+
   it("keeps reading and timeline drafts separated by job and kind", async () => {
     const store = new ReviewDraftStore(new MemoryDraftBackend());
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import threading
 from collections import defaultdict, deque
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -10,13 +11,36 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from app.core.event_logging import event_context, exception_details
+from app.core.processing_control import (
+    ProcessingInterrupted, processing_context, run_in_daemon_thread,
+)
 
 
 logger = logging.getLogger(__name__)
 
 
+async def dispatch_pending_jobs(database: Any, runner: "LocalTaskRunner") -> None:
+    while True:
+        try:
+            for job_id in database.list_job_ids(status="UPLOADED"):
+                if not runner.can_accept:
+                    break
+                if runner.is_scheduled(job_id):
+                    continue
+                # An earlier enqueue may have yielded to a cancellation request.
+                job = database.get_job(job_id)
+                if job is not None and job["status"] == "UPLOADED":
+                    await runner.enqueue(job_id)
+        except Exception as exc:
+            safe_error = exception_details(exc, include_traceback=False)
+            logger.error("Persistent queue dispatch failed (%s: %s); retrying",
+                         safe_error["exception_type"], safe_error["error_summary"])
+            await asyncio.sleep(0.5)
+        await asyncio.sleep(0.1)
+
+
 class QueueCapacityError(RuntimeError):
-    """Compatibility error for older bounded queue integrations."""
+    """Raised when all waiting slots are reserved or the runner is stopping."""
 
 
 class QueueReservation:
@@ -45,12 +69,15 @@ class LocalTaskRunner:
         max_pending_jobs: int = 4,
         worker_count: int = 1,
         heartbeat_interval_seconds: float = 5,
+        shutdown_timeout_seconds: float = 30,
         event_logger: Any | None = None,
     ) -> None:
         if pipeline is None and pipeline_factory is None:
             raise ValueError("pipeline or pipeline_factory is required")
         if worker_count <= 0:
             raise ValueError("worker_count must be greater than zero")
+        if max_pending_jobs <= 0 or shutdown_timeout_seconds <= 0:
+            raise ValueError("queue capacity and shutdown timeout must be positive")
         if heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat_interval_seconds must be greater than zero")
         if worker_count > 1 and pipeline_factory is None:
@@ -64,7 +91,11 @@ class LocalTaskRunner:
         self.worker_count = worker_count
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.event_logger = event_logger
-        self.queue: asyncio.Queue[str] = asyncio.Queue()
+        self.shutdown_timeout_seconds = shutdown_timeout_seconds
+        self.queue: asyncio.Queue[str] = asyncio.Queue(maxsize=max_pending_jobs)
+        self._scheduled_jobs: set[str] = set()
+        self._interrupts: dict[str, threading.Event] = {}
+        self._stopping = False
         self._queued_at: dict[str, deque[float]] = defaultdict(deque)
         self._reserved_slots = 0
         self._capacity_available = asyncio.Event()
@@ -77,12 +108,19 @@ class LocalTaskRunner:
 
     @property
     def can_accept(self) -> bool:
-        return True
+        return not self._stopping and (
+            self.queue.qsize() + self._reserved_slots < self.max_pending_jobs
+        )
 
     def _update_capacity_event(self) -> None:
-        self._capacity_available.set()
+        if self.can_accept or self._stopping:
+            self._capacity_available.set()
+        else:
+            self._capacity_available.clear()
 
     def reserve(self) -> QueueReservation:
+        if not self.can_accept:
+            raise QueueCapacityError("Processing queue is full or stopping")
         self._reserved_slots += 1
         self._update_capacity_event()
         return QueueReservation(self)
@@ -95,12 +133,19 @@ class LocalTaskRunner:
 
     def _enqueue_reserved(self, job_id: str) -> None:
         self._release_reservation()
+        if self._stopping:
+            raise QueueCapacityError("Processing queue is stopping")
+        if job_id in self._scheduled_jobs:
+            return
+        self._scheduled_jobs.add(job_id)
         self._queued_at[job_id].append(time.perf_counter())
         self.queue.put_nowait(job_id)
         self._record_queued(job_id)
         self._update_capacity_event()
 
     async def start(self) -> None:
+        if self._stopping:
+            raise RuntimeError("A stopped task runner cannot be restarted")
         if self._started:
             return
         self._started = True
@@ -161,6 +206,9 @@ class LocalTaskRunner:
             "worker_count": self.worker_count,
             "alive_workers": alive_workers,
             "queued_in_memory": self.queue.qsize(),
+            "queue_capacity": self.max_pending_jobs,
+            "reserved_slots": self._reserved_slots,
+            "accepting_jobs": self.can_accept,
             "last_heartbeat_at": (
                 self._last_heartbeat_at.isoformat()
                 if self._last_heartbeat_at is not None
@@ -179,10 +227,12 @@ class LocalTaskRunner:
         }
 
     async def enqueue(self, job_id: str) -> None:
-        self._queued_at[job_id].append(time.perf_counter())
-        self.queue.put_nowait(job_id)
-        self._record_queued(job_id)
-        self._update_capacity_event()
+        if job_id in self._scheduled_jobs and not self._stopping:
+            return
+        await self.reserve().enqueue(job_id)
+
+    def is_scheduled(self, job_id: str) -> bool:
+        return job_id in self._scheduled_jobs
 
     def _record_queued(self, job_id: str) -> None:
         if self.event_logger is None:
@@ -202,12 +252,17 @@ class LocalTaskRunner:
             try:
                 reservation = self.reserve()
             except QueueCapacityError:
+                if self._stopping:
+                    raise
                 await self._capacity_available.wait()
                 continue
             await reservation.enqueue(job_id)
             return
 
     async def cancel(self, job_id: str) -> bool:
+        interrupt = self._interrupts.get(job_id)
+        if interrupt is not None:
+            interrupt.set()
         retained_job_ids: list[str] = []
         removed = False
         while True:
@@ -221,17 +276,34 @@ class LocalTaskRunner:
                 timestamps = self._queued_at.get(queued_job_id)
                 if timestamps:
                     timestamps.popleft()
+                self._queued_at.pop(queued_job_id, None)
+                self._scheduled_jobs.discard(queued_job_id)
             else:
                 retained_job_ids.append(queued_job_id)
 
         for queued_job_id in retained_job_ids:
             self.queue.put_nowait(queued_job_id)
         self._update_capacity_event()
-        return removed
+        return removed or interrupt is not None
 
     async def stop(self) -> None:
-        await self.queue.join()
+        self._stopping = True
         self._started = False
+        self._update_capacity_event()
+        while not self.queue.empty():
+            job_id = self.queue.get_nowait()
+            self.queue.task_done()
+            self._scheduled_jobs.discard(job_id)
+        pending = set()
+        if self._worker_tasks:
+            _, pending = await asyncio.wait(
+                self._worker_tasks.values(), timeout=self.shutdown_timeout_seconds,
+            )
+        if pending:
+            for interrupt in self._interrupts.values():
+                interrupt.set()
+            # Give external processes time to be killed and reaped.
+            await asyncio.wait(pending, timeout=0.5)
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -244,6 +316,11 @@ class LocalTaskRunner:
             with suppress(asyncio.CancelledError):
                 await asyncio.gather(*worker_tasks)
             self._worker_tasks = {}
+        while not self.queue.empty():
+            job_id = self.queue.get_nowait()
+            self.queue.task_done()
+            self._scheduled_jobs.discard(job_id)
+        self._queued_at.clear()
 
     async def _heartbeat(self) -> None:
         while True:
@@ -265,8 +342,14 @@ class LocalTaskRunner:
                 )
             except TimeoutError:
                 continue
+            if self._stopping:
+                self.queue.task_done()
+                self._scheduled_jobs.discard(job_id)
+                return
             self._update_capacity_event()
             self._active_jobs[worker_index] = (job_id, datetime.now(UTC))
+            interrupt = threading.Event()
+            self._interrupts[job_id] = interrupt
             timestamps = self._queued_at.get(job_id)
             queued_at = timestamps.popleft() if timestamps else time.perf_counter()
             if timestamps is not None and not timestamps:
@@ -292,7 +375,10 @@ class LocalTaskRunner:
                     )
                 started = time.perf_counter()
                 try:
-                    await asyncio.to_thread(pipeline.process, job_id)
+                    with processing_context(interrupt):
+                        await run_in_daemon_thread(pipeline.process, job_id)
+                except ProcessingInterrupted:
+                    logger.info("Processing interrupted for job %s", job_id)
                 except Exception as exc:
                     safe_error = exception_details(exc, include_traceback=False)
                     logger.error(
@@ -326,4 +412,8 @@ class LocalTaskRunner:
                         )
                 finally:
                     self._active_jobs.pop(worker_index, None)
+                    self._interrupts.pop(job_id, None)
+                    self._scheduled_jobs.discard(job_id)
                     self.queue.task_done()
+                if self._stopping:
+                    return
