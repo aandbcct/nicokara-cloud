@@ -79,17 +79,15 @@ describe("KirakaraReviewEditor", () => {
     const html = renderToStaticMarkup(
       <ReviewEditor.KirakaraReviewEditor
         timeline={timeline}
-        activeLineIndex={0}
+        editingLineIndex={0}
         previewLeadMs={100}
-        onActiveLineChange={vi.fn()}
-        onTimingInteractionChange={vi.fn()}
+        onEditingLineChange={vi.fn()}
         onChange={vi.fn()}
         onSeek={vi.fn()}
       />,
     );
 
     expect(html).toContain("时间轴检查");
-    expect(html).toContain('data-current-line-selector="true"');
     expect(html).toContain('data-lyrics-panel="true"');
     expect(html).toContain('data-timing-panel="true"');
     expect(html).toContain("编辑歌词与读音");
@@ -119,10 +117,9 @@ describe("KirakaraReviewEditor", () => {
     const html = renderToStaticMarkup(
       <ReviewEditor.KirakaraReviewEditor
         timeline={timeline}
-        activeLineIndex={0}
+        editingLineIndex={0}
         previewLeadMs={100}
-        onActiveLineChange={vi.fn()}
-        onTimingInteractionChange={vi.fn()}
+        onEditingLineChange={vi.fn()}
         onChange={vi.fn()}
         onSeek={vi.fn()}
       />,
@@ -164,10 +161,9 @@ describe("KirakaraReviewEditor", () => {
     const html = renderToStaticMarkup(
       <ReviewEditor.KirakaraReviewEditor
         timeline={denseTimeline}
-        activeLineIndex={0}
+        editingLineIndex={0}
         previewLeadMs={100}
-        onActiveLineChange={vi.fn()}
-        onTimingInteractionChange={vi.fn()}
+        onEditingLineChange={vi.fn()}
         onChange={vi.fn()}
         onSeek={vi.fn()}
       />,

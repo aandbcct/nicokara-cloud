@@ -131,12 +131,92 @@ describe("KirakaraPreview browser behavior", () => {
     expect(api.saveTimelineReviewDraft).not.toHaveBeenCalled();
   });
 
-  it("REQ-FOLLOW-05 shares the workbench active lyric with the editor", async () => {
-    const { video } = await renderWorkbench("controlled-line");
+  it("REQ-PIN-01 keeps the selected editing line pinned while playback moves", async () => {
+    const { video, container } = await renderWorkbench("pinned-editing-line");
+    installVideoBehavior(video, false);
+    fireEvent.click(screen.getByRole("button", { name: "2. 明日" }));
+    video.currentTime = 1.1;
+    fireEvent.timeUpdate(video);
+    await waitFor(() => expect(screen.getByRole("button", { name: /1\. 今日/ }).getAttribute("aria-current")).toBe("true"));
+    expect(screen.getByRole("button", { name: "2. 明日" }).getAttribute("data-editing-line")).toBe("true");
+    expect(container.querySelector('[aria-label="当前歌词行时间轴：明日"]')).toBeTruthy();
+  });
+
+  it("REQ-PIN-02 locates the editor on the current playback line without seeking", async () => {
+    const { video, container } = await renderWorkbench("locate-playback-line");
     installVideoBehavior(video, false);
     video.currentTime = 3.1;
     fireEvent.timeUpdate(video);
-    await waitFor(() => expect(screen.getByRole("button", { name: "2. 明日" }).getAttribute("aria-current")).toBe("true"));
+    fireEvent.click(screen.getByRole("button", { name: "定位歌词" }));
+    expect(container.querySelector('[aria-label="当前歌词行时间轴：明日"]')).toBeTruthy();
+    expect(video.currentTime).toBe(3.1);
+  });
+
+  it("REQ-PIN-03 focuses the video after a lyric is clicked", async () => {
+    const { video } = await renderWorkbench("lyric-focuses-video");
+    installVideoBehavior(video);
+    fireEvent.click(screen.getByRole("button", { name: "2. 明日" }));
+    expect(document.activeElement).toBe(video);
+  });
+
+  it("REQ-LIST-01 renders a persistent scrollable lyric list", async () => {
+    const { container } = await renderWorkbench("scrollable-lyrics");
+    expect(container.querySelector('[data-lyric-navigator="true"]')?.className).toContain("overflow-y-auto");
+  });
+
+  it("REQ-LIST-02 places the lyric tabs after the timeline for vertical layouts", async () => {
+    const { container } = await renderWorkbench("vertical-lyrics");
+    const timelinePanel = container.querySelector('[data-kirakara-timeline-panel="true"]');
+    const controlsPanel = container.querySelector('[data-kirakara-controls-panel="true"]');
+    const position = timelinePanel && controlsPanel
+      ? timelinePanel.compareDocumentPosition(controlsPanel)
+      : 0;
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("REQ-LIST-03-A displays lyric line numbers and text", async () => {
+    await renderWorkbench("numbered-lyrics");
+    expect(screen.getByRole("button", { name: "2. 明日" })).toBeTruthy();
+  });
+
+  it("REQ-LIST-03-B marks the playback lyric independently", async () => {
+    const { video } = await renderWorkbench("playback-lyric-highlight");
+    installVideoBehavior(video, false);
+    video.currentTime = 3.1;
+    fireEvent.timeUpdate(video);
+    expect(screen.getByRole("button", { name: /2\. 明日/ }).getAttribute("aria-current")).toBe("true");
+  });
+
+  it("REQ-LIST-04 scrolls the current playback lyric into view", async () => {
+    const { video } = await renderWorkbench("playback-lyric-scroll");
+    installVideoBehavior(video, false);
+    vi.mocked(Element.prototype.scrollIntoView).mockClear();
+    video.currentTime = 3.1;
+    fireEvent.timeUpdate(video);
+    await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1));
+  });
+
+  it("REQ-SELECT-01 seeks a manually selected lyric with preview lead", async () => {
+    const { video } = await renderWorkbench("selection-preview-lead");
+    installVideoBehavior(video);
+    fireEvent.click(screen.getByRole("button", { name: "2. 明日" }));
+    expect(video.currentTime).toBe(2.9);
+  });
+
+  it("REQ-LEAD-01 uses the configured preview lead for lyric selection", async () => {
+    const { video } = await renderWorkbench("configured-selection-lead");
+    installVideoBehavior(video);
+    fireEvent.change(screen.getByLabelText("复听提前量（ms）"), { target: { value: "250" } });
+    fireEvent.click(screen.getByRole("button", { name: "2. 明日" }));
+    expect(video.currentTime).toBe(2.75);
+  });
+
+  it("REQ-LEAD-06 does not save a timeline edit when selecting a lyric", async () => {
+    const api = await import("@/services/api");
+    const { video } = await renderWorkbench("selection-no-save");
+    installVideoBehavior(video);
+    fireEvent.click(screen.getByRole("button", { name: "2. 明日" }));
+    expect(api.saveTimelineReviewDraft).not.toHaveBeenCalled();
   });
 
   it("REQ-PLAY-01 keeps selection from starting paused video", async () => {
@@ -212,6 +292,11 @@ describe("KirakaraPreview browser behavior", () => {
     expect((screen.getByLabelText("复听提前量（ms）") as HTMLInputElement).value).toBe("100");
   });
 
+  it("REQ-SET-01 renders timing settings inside the timeline card", async () => {
+    const { container } = await renderWorkbench("timing-settings-placement");
+    expect(container.querySelector('[data-timing-settings="true"]')?.closest('[data-kirakara-timeline-panel="true"]')).toBeTruthy();
+  });
+
   it("REQ-LEAD-10 updates and saves preview lead on each input change", async () => {
     await renderWorkbench("lead-immediate");
     fireEvent.change(screen.getByLabelText("复听提前量（ms）"), { target: { value: "250" } });
@@ -236,5 +321,42 @@ describe("KirakaraPreview browser behavior", () => {
     video.currentTime = 18.8;
     fireEvent.timeUpdate(video);
     expect(screen.getByLabelText("当前视频时间").textContent).toBe("18.800");
+  });
+
+  it("REQ-KEY-03 toggles video playback while a timing boundary is focused", async () => {
+    const { video } = await renderWorkbench("boundary-space-playback");
+    installVideoBehavior(video);
+    fireEvent.click(screen.getByRole("button", { name: "1. 今日" }));
+    const boundary = screen.getByRole("button", { name: "调整第 1 个 Mora 分界" });
+    boundary.focus();
+    fireEvent.keyDown(boundary, { key: " " });
+    expect(video.play).toHaveBeenCalledTimes(1);
+  });
+
+  it("REQ-KEY-04 changes playback rate while a timing boundary is focused", async () => {
+    const { video } = await renderWorkbench("boundary-rate-shortcut");
+    installVideoBehavior(video);
+    fireEvent.click(screen.getByRole("button", { name: "1. 今日" }));
+    const boundary = screen.getByRole("button", { name: "调整第 1 个 Mora 分界" });
+    boundary.focus();
+    fireEvent.keyDown(boundary, { key: "x" });
+    expect((screen.getByLabelText("播放倍速") as HTMLSelectElement).value).toBe("0.9");
+  });
+
+  it("REQ-PLACEMENT-01 switches the right-side panel between lyrics and subtitle style", async () => {
+    await renderWorkbench("side-tabs");
+    expect(screen.getByRole("tab", { name: "滚动歌词" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByRole("tab", { name: "字幕样式" }));
+    expect(screen.getByRole("heading", { name: "字幕样式" })).toBeTruthy();
+  });
+
+  it("REQ-PLACEMENT-02 orders the timeline before the side tabs in vertical flow", async () => {
+    const { container } = await renderWorkbench("vertical-panel-order");
+    const timelinePanel = container.querySelector('[data-kirakara-timeline-panel="true"]');
+    const controlsPanel = container.querySelector('[data-kirakara-controls-panel="true"]');
+    const position = timelinePanel && controlsPanel
+      ? timelinePanel.compareDocumentPosition(controlsPanel)
+      : 0;
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

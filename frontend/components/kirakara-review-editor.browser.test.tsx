@@ -48,10 +48,9 @@ type EditorOverrides = Partial<Parameters<typeof KirakaraReviewEditor>[0]>;
 function renderEditor(overrides: EditorOverrides = {}) {
   const props: Parameters<typeof KirakaraReviewEditor>[0] = {
     timeline,
-    activeLineIndex: 0,
+    editingLineIndex: 0,
     previewLeadMs: 100,
-    onActiveLineChange: vi.fn(),
-    onTimingInteractionChange: vi.fn(),
+    onEditingLineChange: vi.fn(),
     onChange: vi.fn(),
     onSeek: vi.fn(),
     ...overrides,
@@ -66,52 +65,23 @@ describe("KirakaraReviewEditor browser behavior", () => {
 
   afterEach(() => cleanup());
 
-  it("REQ-LIST-01 renders a persistent scrollable desktop lyric list", () => {
-    renderEditor();
-    expect(screen.getByRole("button", { name: "2. 明日" }).closest('[data-desktop-lyric-list="true"]')?.className).toContain("overflow-y-auto");
-  });
-
-  it("REQ-LIST-02 keeps a mobile lyric select", () => {
-    renderEditor();
-    expect(screen.getByLabelText("当前歌词行").closest("label")?.className).toContain("md:hidden");
-  });
-
-  it("REQ-LIST-03-A displays lyric line numbers and text", () => {
-    renderEditor();
-    expect(screen.getByRole("button", { name: "2. 明日" })).toBeTruthy();
-  });
-
-  it("REQ-LIST-03-B marks the controlled active lyric", () => {
-    renderEditor();
-    expect(screen.getByRole("button", { name: "1. 今日" }).getAttribute("aria-current")).toBe("true");
-  });
-
-  it("REQ-LIST-04 scrolls only the newly active lyric into view", () => {
-    const { rerender, props } = renderEditor();
-    vi.mocked(Element.prototype.scrollIntoView).mockClear();
-    rerender(<KirakaraReviewEditor {...props} activeLineIndex={1} />);
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
-  });
-
-  it("REQ-SELECT-01 seeks a manually selected lyric with preview lead", () => {
-    const onSeek = vi.fn();
-    renderEditor({ onSeek });
-    fireEvent.click(screen.getByRole("button", { name: "2. 明日" }));
-    expect(onSeek).toHaveBeenCalledWith(2900);
-  });
-
-  it("REQ-LEAD-01 uses the configured preview lead instead of a fixed value", () => {
-    const onSeek = vi.fn();
-    renderEditor({ onSeek, previewLeadMs: 250 });
-    fireEvent.click(screen.getByRole("button", { name: "2. 明日" }));
-    expect(onSeek).toHaveBeenCalledWith(2750);
-  });
-
   it("REQ-SELECT-03 routes the next button through the controlled selection callback", () => {
-    const onActiveLineChange = vi.fn();
-    renderEditor({ onActiveLineChange });
+    const onEditingLineChange = vi.fn();
+    renderEditor({ onEditingLineChange });
     fireEvent.click(screen.getByRole("button", { name: "下一句" }));
-    expect(onActiveLineChange).toHaveBeenCalledWith(1);
+    expect(onEditingLineChange).toHaveBeenCalledWith(1);
+  });
+
+  it("REQ-PLACEMENT-03 keeps undo and line navigation inside the timing panel", () => {
+    renderEditor();
+    expect(screen.getByRole("button", { name: "撤销" }).closest('[data-timing-panel="true"]')).toBeTruthy();
+    expect(screen.getByRole("button", { name: "下一句" }).closest('[data-timing-panel="true"]')).toBeTruthy();
+  });
+
+  it("REQ-KEY-05 marks all timestamp controls for playback shortcuts", () => {
+    const { container } = renderEditor();
+    const timestampControls = container.querySelectorAll('[data-time-boundary-kind], input[type="number"]');
+    expect([...timestampControls].every((element) => element.getAttribute("data-playback-shortcuts") === "true")).toBe(true);
   });
 
   it("REQ-TIME-01 exposes line-start, Mora, and line-end boundary controls", () => {
@@ -164,13 +134,6 @@ describe("KirakaraReviewEditor browser behavior", () => {
     renderEditor({ onSeek });
     fireEvent.keyDown(screen.getByRole("button", { name: "调整第 1 个 Mora 分界" }), { key: "ArrowRight" });
     expect(onSeek).toHaveBeenCalledWith(1510);
-  });
-
-  it("REQ-LEAD-06 does not create a timeline change when selecting a lyric", () => {
-    const onChange = vi.fn();
-    renderEditor({ onChange });
-    fireEvent.click(screen.getByRole("button", { name: "2. 明日" }));
-    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("REQ-LAYOUT-01 omits duplicate line-start nudge buttons", () => {

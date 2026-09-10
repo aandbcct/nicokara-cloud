@@ -110,9 +110,12 @@ export function playbackShortcut(
   const element = target as (EventTarget & {
     tagName?: string;
     isContentEditable?: boolean;
+    getAttribute?: (name: string) => string | null;
   }) | null;
   const tagName = element?.tagName?.toLowerCase();
-  if (element?.isContentEditable || tagName === "input" || tagName === "textarea" || tagName === "select") {
+  const allowsPlaybackShortcuts = element?.getAttribute?.("data-playback-shortcuts") === "true";
+  if (!allowsPlaybackShortcuts
+    && (element?.isContentEditable || tagName === "input" || tagName === "textarea" || tagName === "select")) {
     return null;
   }
 
@@ -120,7 +123,7 @@ export function playbackShortcut(
   if (key === "x") return PlaybackShortcut.RateDown;
   if (key === "c") return PlaybackShortcut.RateUp;
   if (key === "z") return PlaybackShortcut.RateToggle;
-  if (event.key === " " && tagName !== "button" && tagName !== "a" && tagName !== "video") {
+  if (event.key === " " && (allowsPlaybackShortcuts || (tagName !== "button" && tagName !== "a" && tagName !== "video"))) {
     return PlaybackShortcut.PlayToggle;
   }
   return null;

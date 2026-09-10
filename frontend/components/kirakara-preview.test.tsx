@@ -107,31 +107,16 @@ describe("KirakaraPreview", () => {
     expect(html).toContain('data-kirakara-preview-panel="true"');
     expect(html).toContain('data-kirakara-timeline-panel="true"');
     expect(html).toContain('data-kirakara-controls-panel="true"');
-    expect(html).toContain("xl:grid-cols-[minmax(0,1.05fr)_minmax(22rem,1fr)]");
+    expect(html).toContain("xl:grid-cols-[minmax(0,1.55fr)_minmax(20rem,0.7fr)]");
     expect(html).toContain("lg:col-start-1 lg:row-start-1");
-    expect(html).toContain("lg:col-span-2 lg:row-start-2");
-    expect(html).toContain("lg:col-start-2 lg:row-start-1");
+    expect(html).toContain("lg:col-start-1 lg:row-start-2");
+    expect(html).toContain("lg:col-start-2 lg:row-span-2 lg:row-start-1");
     expect(html).not.toContain("lg:max-h-[min(22rem,calc(100vh-19rem))]");
     expect(html).not.toContain("xl:grid-cols-[minmax(0,1fr)_minmax(16rem,20rem)]");
   });
 });
 
 describe("subtitle playback control requirements", () => {
-  it("REQ-FOLLOW-01 allows automatic following while playback is active", async () => {
-    const preview = await loadPreview();
-    expect(preview?.shouldFollowPlayback(true, false)).toBe(true);
-  });
-
-  it("REQ-FOLLOW-02 prevents automatic following while playback is paused", async () => {
-    const preview = await loadPreview();
-    expect(preview?.shouldFollowPlayback(false, false)).toBe(false);
-  });
-
-  it("REQ-PLAY-04 gives a timing interaction priority over automatic following", async () => {
-    const preview = await loadPreview();
-    expect(preview?.shouldFollowPlayback(true, true)).toBe(false);
-  });
-
   it("REQ-SELECT-02 seeks without calling play or pause", async () => {
     const preview = await loadPreview();
     const video = { currentTime: 0, duration: 5, play: vi.fn(), pause: vi.fn() };
@@ -191,15 +176,6 @@ describe("subtitle playback control requirements", () => {
     rememberLocalVideo("job-rate-default", new File(["video"], "song.mp4"));
     const html = renderToStaticMarkup(<preview.KirakaraPreview jobId="job-rate-default" expectedVideoName="song.mp4" />);
     expect(html).toContain('<option value="1" selected="">1.0×</option>');
-  });
-
-  it("REQ-SET-01 renders timing settings inside the workbench", async () => {
-    const preview = await loadPreview();
-    expect(preview).not.toBeNull();
-    if (!preview) return;
-    rememberLocalVideo("job-settings", new File(["video"], "song.mp4"));
-    const html = renderToStaticMarkup(<preview.KirakaraPreview jobId="job-settings" expectedVideoName="song.mp4" />);
-    expect(html).toContain('data-timing-settings="true"');
   });
 
   it("REQ-VIDEO-TIME-01 renders current video time beside playback controls", async () => {

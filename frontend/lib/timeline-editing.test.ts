@@ -121,4 +121,20 @@ describe("subtitle playback requirements", () => {
     const target = { tagName: "BUTTON" } as unknown as EventTarget;
     expect(editing.playbackShortcut({ key: " ", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, target)).toBeNull();
   });
+
+  it("REQ-KEY-01 allows Space on an explicitly marked timing target", () => {
+    const target = {
+      tagName: "BUTTON",
+      getAttribute: (name: string) => name === "data-playback-shortcuts" ? "true" : null,
+    } as unknown as EventTarget;
+    expect(editing.playbackShortcut({ key: " ", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, target)).toBe(editing.PlaybackShortcut.PlayToggle);
+  });
+
+  it("REQ-KEY-02 allows rate shortcuts on an explicitly marked timestamp input", () => {
+    const target = {
+      tagName: "INPUT",
+      getAttribute: (name: string) => name === "data-playback-shortcuts" ? "true" : null,
+    } as unknown as EventTarget;
+    expect(editing.playbackShortcut({ key: "z", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, target)).toBe(editing.PlaybackShortcut.RateToggle);
+  });
 });
