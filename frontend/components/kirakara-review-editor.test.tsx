@@ -79,6 +79,10 @@ describe("KirakaraReviewEditor", () => {
     const html = renderToStaticMarkup(
       <ReviewEditor.KirakaraReviewEditor
         timeline={timeline}
+        activeLineIndex={0}
+        previewLeadMs={100}
+        onActiveLineChange={vi.fn()}
+        onTimingInteractionChange={vi.fn()}
         onChange={vi.fn()}
         onSeek={vi.fn()}
       />,
@@ -115,6 +119,10 @@ describe("KirakaraReviewEditor", () => {
     const html = renderToStaticMarkup(
       <ReviewEditor.KirakaraReviewEditor
         timeline={timeline}
+        activeLineIndex={0}
+        previewLeadMs={100}
+        onActiveLineChange={vi.fn()}
+        onTimingInteractionChange={vi.fn()}
         onChange={vi.fn()}
         onSeek={vi.fn()}
       />,
@@ -156,6 +164,10 @@ describe("KirakaraReviewEditor", () => {
     const html = renderToStaticMarkup(
       <ReviewEditor.KirakaraReviewEditor
         timeline={denseTimeline}
+        activeLineIndex={0}
+        previewLeadMs={100}
+        onActiveLineChange={vi.fn()}
+        onTimingInteractionChange={vi.fn()}
         onChange={vi.fn()}
         onSeek={vi.fn()}
       />,

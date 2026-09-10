@@ -1,6 +1,6 @@
 "use client";
 
-import { Cloud, Film, FolderOpen, LoaderCircle, RefreshCw } from "lucide-react";
+import { Cloud, Film, FolderOpen, LoaderCircle, RefreshCw, Settings2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { KirakaraDomFrame } from "@/components/kirakara-dom-frame";
@@ -43,11 +43,19 @@ import {
 } from "@/services/api";
 import type { Job } from "@/types/job";
 import {
-  createTimelineHistory, recordTimelineEdit, undoTimelineEdit, redoTimelineEdit,
-  loopPlaybackTime, type PlaybackRange, type TimelineHistory,
+  activeTimelineLineIndex, createTimelineHistory, formatPlaybackSeconds,
+  loopPlaybackTime, playbackShortcut, PLAYBACK_RATES, PlaybackShortcut,
+  previewSeekMs, recordTimelineEdit, redoTimelineEdit, stepPlaybackRate,
+  undoTimelineEdit, type PlaybackRange, type TimelineHistory,
 } from "@/lib/timeline-editing";
+import {
+  DEFAULT_PREVIEW_LEAD_MS,
+  loadPreviewLeadMs,
+  savePreviewLeadMs,
+} from "@/lib/playback-preferences";
 
 const TIMELINE_AUTOSAVE_DELAY_MS = 600;
+export const RATE_NOTICE_DURATION_MS = 1000;
 
 type TimelineSaveState = {
   phase: "idle" | "pending" | "saving" | "saved" | "restored" | "error";
@@ -96,6 +104,44 @@ export function createPreviewFrameLoop({
   };
 }
 
+export function playbackRateAfterShortcut(
+  shortcut: PlaybackShortcut,
+  currentRate: number,
+  lastNonDefaultRate: number,
+): number {
+  if (shortcut === PlaybackShortcut.RateDown) return stepPlaybackRate(currentRate, -1);
+  if (shortcut === PlaybackShortcut.RateUp) return stepPlaybackRate(currentRate, 1);
+  if (shortcut === PlaybackShortcut.RateToggle) return currentRate === 1 ? lastNonDefaultRate : 1;
+  return currentRate;
+}
+
+export function shouldFollowPlayback(isPlaying: boolean, timingInteractionActive: boolean): boolean {
+  return isPlaying && !timingInteractionActive;
+}
+
+export function seekVideoWithoutPlaybackChange(
+  video: Pick<HTMLVideoElement, "currentTime" | "duration">,
+  milliseconds: number,
+): number {
+  const durationMs = Number.isFinite(video.duration) ? video.duration * 1000 : undefined;
+  const targetMs = previewSeekMs(milliseconds, 0, durationMs);
+  video.currentTime = targetMs / 1000;
+  return targetMs;
+}
+
+export function PlaybackRateNotice({ rate }: { rate: number | null }) {
+  if (rate === null) return null;
+  return (
+    <div
+      data-playback-rate-notice="true"
+      aria-live="polite"
+      className="pointer-events-none absolute right-3 top-3 rounded bg-black/70 px-2.5 py-1.5 text-sm font-semibold text-white"
+    >
+      {rate.toFixed(1)}×
+    </div>
+  );
+}
+
 export function KirakaraPreview({
   jobId,
   expectedVideoName,
@@ -127,6 +173,21 @@ export function KirakaraPreview({
   const [historyAvailability, setHistoryAvailability] = useState({ canUndo: false, canRedo: false });
   const loopRange = useRef<PlaybackRange | null>(null);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [activeLineIndex, setActiveLineIndex] = useState<number | null>(null);
+  const activeLineIndexRef = useRef<number | null>(null);
+  const programmaticSeekLineRef = useRef<number | null>(null);
+  const timingInteractionActive = useRef(false);
+  const [playbackMs, setPlaybackMs] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [lastNonDefaultRate, setLastNonDefaultRate] = useState(0.9);
+  const [rateNotice, setRateNotice] = useState<number | null>(null);
+  const rateNoticeTimer = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
+  const [previewLeadMs, setPreviewLeadMs] = useState(() =>
+    typeof window === "undefined"
+      ? DEFAULT_PREVIEW_LEAD_MS
+      : loadPreviewLeadMs(window.localStorage),
+  );
   const [frame, setFrame] = useState<KirakaraFrame | null>(null);
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [autosaveTrigger, setAutosaveTrigger] = useState<{
@@ -164,7 +225,19 @@ export function KirakaraPreview({
     savedAtRef.current = null;
     history.current = null;
     loopRange.current = null;
+    activeLineIndexRef.current = null;
+    programmaticSeekLineRef.current = null;
+    globalThis.queueMicrotask(() => {
+      if (activeJobId.current !== jobId) return;
+      setActiveLineIndex(null);
+      setPlaybackMs(0);
+      setIsPlaying(false);
+    });
   }, [jobId]);
+
+  useEffect(() => () => {
+    if (rateNoticeTimer.current !== null) globalThis.clearTimeout(rateNoticeTimer.current);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -343,12 +416,29 @@ export function KirakaraPreview({
     if (!videoElement) return;
     const loopTime = loopPlaybackTime(loopRange.current, videoElement.currentTime, videoElement.duration, !videoElement.paused);
     if (loopTime !== null) videoElement.currentTime = loopTime;
+    const currentMs = Math.max(0, Math.round(videoElement.currentTime * 1000));
+    setPlaybackMs((previous) => previous === currentMs ? previous : currentMs);
+    if (timeline && shouldFollowPlayback(!videoElement.paused, timingInteractionActive.current)) {
+      const protectedIndex = programmaticSeekLineRef.current;
+      const protectedLine = protectedIndex === null ? undefined : timeline.lines[protectedIndex];
+      const insidePreviewLead = protectedLine !== undefined
+        && currentMs >= previewSeekMs(protectedLine.startMs, previewLeadMs, timeline.durationMs)
+        && currentMs < protectedLine.startMs;
+      if (!insidePreviewLead) programmaticSeekLineRef.current = null;
+      const nextIndex = insidePreviewLead
+        ? protectedIndex
+        : activeTimelineLineIndex(timeline.lines, currentMs, activeLineIndexRef.current);
+      if (nextIndex !== activeLineIndexRef.current) {
+        activeLineIndexRef.current = nextIndex;
+        setActiveLineIndex(nextIndex);
+      }
+    }
     setFrame(
       timeline
-        ? activeKirakaraFrame(timeline, videoElement.currentTime * 1000)
+        ? activeKirakaraFrame(timeline, currentMs)
         : null,
     );
-  }, [timeline]);
+  }, [previewLeadMs, timeline]);
 
   useEffect(() => {
     frameLoop.current ??= createPreviewFrameLoop({
@@ -362,6 +452,39 @@ export function KirakaraPreview({
     setStyle(nextStyle);
     saveKirakaraStyle(window.localStorage, nextStyle);
   }
+
+  const changePlaybackRate = useCallback((nextRate: number) => {
+    const normalized = Math.min(2.5, Math.max(0.1, Math.round(nextRate * 10) / 10));
+    if (normalized === playbackRate) return;
+    const element = videoRef.current;
+    if (element) element.playbackRate = normalized;
+    setPlaybackRate(normalized);
+    if (normalized !== 1) setLastNonDefaultRate(normalized);
+    setRateNotice(normalized);
+    if (rateNoticeTimer.current !== null) globalThis.clearTimeout(rateNoticeTimer.current);
+    rateNoticeTimer.current = globalThis.setTimeout(() => setRateNotice(null), RATE_NOTICE_DURATION_MS);
+  }, [playbackRate]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const shortcut = playbackShortcut(event, event.target);
+      if (shortcut === null) return;
+      event.preventDefault();
+      if (shortcut !== PlaybackShortcut.PlayToggle) {
+        changePlaybackRate(playbackRateAfterShortcut(shortcut, playbackRate, lastNonDefaultRate));
+      } else {
+        const element = videoRef.current;
+        if (!element) return;
+        if (element.paused) {
+          void element.play().catch(() => setPlaybackError("播放未能开始，请使用视频控件重试。"));
+        } else {
+          element.pause();
+        }
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [changePlaybackRate, lastNonDefaultRate, playbackRate]);
 
   function saveTimelineChange(nextTimeline: KirakaraTimeline) {
     setHistoryAvailability({ canUndo: Boolean(history.current?.past.length), canRedo: Boolean(history.current?.future.length) });
@@ -393,13 +516,10 @@ export function KirakaraPreview({
       setPlaybackError("当前句超出视频时长");
       return;
     }
+    programmaticSeekLineRef.current = activeLineIndexRef.current;
     element.currentTime = range.startMs / 1000;
-    void element.play().catch(() => setPlaybackError("试听未能开始，请在视频上点击播放。"));
-  }, []);
-
-  function continueLoop() {
-    if (loopRange.current) loopLine(loopRange.current);
-  }
+    updateFrame();
+  }, [updateFrame]);
 
   function retryTimelineSave() {
     if (!timeline) return;
@@ -433,8 +553,19 @@ export function KirakaraPreview({
   function seekPreview(milliseconds: number) {
     const element = videoRef.current;
     if (!element) return;
-    element.currentTime = milliseconds / 1000;
+    programmaticSeekLineRef.current = activeLineIndexRef.current;
+    seekVideoWithoutPlaybackChange(element, milliseconds);
     updateFrame();
+  }
+
+  function selectActiveLine(index: number) {
+    activeLineIndexRef.current = index;
+    setActiveLineIndex(index);
+  }
+
+  function updatePreviewLead(value: string | number | null) {
+    const normalized = savePreviewLeadMs(window.localStorage, value);
+    setPreviewLeadMs(normalized);
   }
 
   return (
@@ -486,18 +617,30 @@ export function KirakaraPreview({
                   playsInline
                   preload="metadata"
                   className="size-full object-contain"
-                  onLoadedMetadata={updateFrame}
+                  onLoadedMetadata={(event) => {
+                    event.currentTarget.playbackRate = playbackRate;
+                    updateFrame();
+                  }}
                   onTimeUpdate={updateFrame}
                   onSeeked={updateFrame}
-                  onPlay={startDrawing}
-                  onEnded={continueLoop}
+                  onPlay={() => {
+                    setIsPlaying(true);
+                    startDrawing();
+                  }}
+                  onEnded={() => {
+                    setIsPlaying(false);
+                    stopDrawing();
+                    updateFrame();
+                  }}
                   onPause={() => {
+                    setIsPlaying(false);
                     stopDrawing();
                     updateFrame();
                   }}
                 />
               )}
               <KirakaraDomFrame frame={frame} style={style} />
+              <PlaybackRateNotice rate={rateNotice} />
               {!timeline && !timelineError && (
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 bg-black/45 text-sm text-white">
                   <LoaderCircle className="size-4 animate-spin" />
@@ -505,6 +648,57 @@ export function KirakaraPreview({
                 </div>
               )}
             </div>
+            <div data-playback-controls="true" className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+              <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                播放倍速
+                <select
+                  aria-label="播放倍速"
+                  value={playbackRate}
+                  onChange={(event) => changePlaybackRate(Number(event.target.value))}
+                  className="focus-ring h-9 rounded-md border bg-background px-2 text-sm text-foreground"
+                >
+                  {PLAYBACK_RATES.map((rate) => (
+                    <option key={rate} value={rate}>{rate.toFixed(1)}×</option>
+                  ))}
+                </select>
+              </label>
+              <output
+                data-current-video-time="true"
+                aria-label="当前视频时间"
+                className="font-mono tabular-nums text-foreground"
+              >
+                {formatPlaybackSeconds(playbackMs)}
+              </output>
+              <span className="sr-only" data-playing={isPlaying}>播放状态</span>
+            </div>
+            <details data-timing-settings="true" className="mt-3 rounded-md border bg-background/60">
+              <summary className="focus-ring flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+                <Settings2 className="size-4" />
+                调轴设置
+              </summary>
+              <div className="space-y-3 border-t p-3">
+                <label className="block text-xs font-medium text-muted-foreground">
+                  复听提前量（ms）
+                  <input
+                    type="number"
+                    min="0"
+                    max="2000"
+                    step="1"
+                    value={previewLeadMs}
+                    onChange={(event) => updatePreviewLead(event.target.value)}
+                    className="focus-ring mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => updatePreviewLead(DEFAULT_PREVIEW_LEAD_MS)}
+                  className="focus-ring rounded-md border px-3 py-2 text-xs font-semibold hover:bg-muted"
+                >
+                  恢复默认值
+                </button>
+                <p className="text-xs leading-5 text-muted-foreground">方向键微调边界；X/C 调整倍速；Z 切换常速；空格播放或暂停。</p>
+              </div>
+            </details>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
               <span>
                 {!capabilities
@@ -571,6 +765,10 @@ export function KirakaraPreview({
                 <KirakaraReviewEditor
                   key={jobId}
                   timeline={timeline}
+                  activeLineIndex={activeLineIndex}
+                  previewLeadMs={previewLeadMs}
+                  onActiveLineChange={selectActiveLine}
+                  onTimingInteractionChange={(active) => { timingInteractionActive.current = active; }}
                   onChange={updateTimeline}
                   onSeek={seekPreview}
                   canUndo={historyAvailability.canUndo}

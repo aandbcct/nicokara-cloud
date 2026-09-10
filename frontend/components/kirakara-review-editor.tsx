@@ -29,11 +29,16 @@ import type {
   KirakaraLine,
   KirakaraTimeline,
 } from "@/lib/kirakara-timeline";
-import type { PlaybackRange } from "@/lib/timeline-editing";
+import { formatPlaybackSeconds, previewSeekMs, type PlaybackRange } from "@/lib/timeline-editing";
 
 type TimingDragTarget =
   | { kind: "line-edge"; edge: "start" | "end" }
   | { kind: "mora-boundary"; boundaryIndex: number; baseTimeMs: number };
+
+type TimingBoundaryTarget =
+  | { kind: "line-start" }
+  | { kind: "mora"; boundaryIndex: number }
+  | { kind: "line-end" };
 
 type TimingDrag = {
   pointerId: number;
@@ -134,6 +139,21 @@ export function timingDragPreviewMs(
   return boundary.endMs;
 }
 
+export function timingDragSeekMs(
+  timeline: KirakaraTimeline,
+  lineIndex: number,
+  target:
+    | { kind: "line-edge"; edge: "start" | "end" }
+    | { kind: "mora-boundary"; boundaryIndex: number },
+  previewLeadMs: number,
+): number {
+  return previewSeekMs(
+    timingDragPreviewMs(timeline, lineIndex, target),
+    previewLeadMs,
+    timeline.durationMs,
+  );
+}
+
 function moraBoundaryMarkers(
   segments: TimingSegment[],
   lineStartMs: number,
@@ -165,11 +185,19 @@ function moraBoundaryMarkers(
 
 export function KirakaraReviewEditor({
   timeline,
+  activeLineIndex,
+  previewLeadMs,
+  onActiveLineChange,
+  onTimingInteractionChange,
   onChange,
   onSeek,
   canUndo = false, canRedo = false, onUndo, onRedo, onLoop,
 }: {
   timeline: KirakaraTimeline;
+  activeLineIndex: number | null;
+  previewLeadMs: number;
+  onActiveLineChange: (index: number) => void;
+  onTimingInteractionChange: (active: boolean) => void;
   onChange: (timeline: KirakaraTimeline, group?: string) => void;
   onSeek: (milliseconds: number) => void;
   canUndo?: boolean;
@@ -178,16 +206,17 @@ export function KirakaraReviewEditor({
   onRedo?: () => void;
   onLoop?: (range: PlaybackRange | null) => void;
 }) {
-  const [lineIndex, setLineIndex] = useState(0);
   const [offset, setOffset] = useState("0.00");
   const [error, setError] = useState<string | null>(null);
   const [stepMs, setStepMs] = useState(10);
   const [looping, setLooping] = useState(false);
   const [activeDrag, setActiveDrag] = useState<TimingDragTarget | null>(null);
+  const [selectedBoundary, setSelectedBoundary] = useState<TimingBoundaryTarget | null>(null);
   const timelineTrack = useRef<HTMLDivElement | null>(null);
   const timingDrag = useRef<TimingDrag | null>(null);
-  const activeLineIndex = timeline.lines[lineIndex] ? lineIndex : 0;
-  const line = timeline.lines[activeLineIndex];
+  const lyricItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const currentLineIndex = activeLineIndex ?? -1;
+  const line = timeline.lines[currentLineIndex];
   const lineStartMs = line?.startMs;
   const lineEndMs = line?.endMs;
 
@@ -195,6 +224,10 @@ export function KirakaraReviewEditor({
     onLoop?.(looping && lineStartMs !== undefined && lineEndMs !== undefined ? { startMs: lineStartMs, endMs: lineEndMs } : null);
   }, [looping, lineStartMs, lineEndMs, onLoop]);
   useEffect(() => () => onLoop?.(null), [onLoop]);
+  useEffect(() => {
+    if (activeLineIndex === null) return;
+    lyricItemRefs.current[activeLineIndex]?.scrollIntoView({ block: "nearest" });
+  }, [activeLineIndex]);
 
   const lineOptions = useMemo(
     () => timeline.lines.map((candidate, index) => ({
@@ -230,18 +263,17 @@ export function KirakaraReviewEditor({
     + MORA_TRACK_BOTTOM_GAP_PX;
 
   function selectLine(index: number) {
-    setLineIndex(index);
     setError(null);
     const selected = timeline.lines[index];
     if (selected) {
-      if (looping) onLoop?.({ startMs: selected.startMs, endMs: selected.endMs });
-      onSeek(selected.startMs);
+      onActiveLineChange(index);
+      onSeek(previewSeekMs(selected.startMs, previewLeadMs, timeline.durationMs));
     }
   }
 
   function changeRange(startMs: number, endMs: number) {
     try {
-      onChange(updateLineRange(timeline, activeLineIndex, startMs, endMs));
+      onChange(updateLineRange(timeline, currentLineIndex, startMs, endMs));
       setError(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "时间范围无效");
@@ -260,12 +292,12 @@ export function KirakaraReviewEditor({
   }
 
   function changeUnitText(unitIndex: number, text: string) {
-    onChange(updateUnitText(timeline, activeLineIndex, unitIndex, text));
+    onChange(updateUnitText(timeline, currentLineIndex, unitIndex, text));
     setError(null);
   }
 
   function changeUnitReading(unitIndex: number, reading: string) {
-    onChange(updateUnitReading(timeline, activeLineIndex, unitIndex, reading));
+    onChange(updateUnitReading(timeline, currentLineIndex, unitIndex, reading));
     setError(null);
   }
 
@@ -282,7 +314,7 @@ export function KirakaraReviewEditor({
     setError(null);
     timingDrag.current = {
       pointerId: event.pointerId,
-      lineIndex: activeLineIndex,
+      lineIndex: currentLineIndex,
       target,
       startClientX: event.clientX,
       trackWidth,
@@ -292,6 +324,10 @@ export function KirakaraReviewEditor({
       moved: false,
     };
     setActiveDrag(target);
+    setSelectedBoundary(target.kind === "line-edge"
+      ? { kind: target.edge === "start" ? "line-start" : "line-end" }
+      : { kind: "mora", boundaryIndex: target.boundaryIndex });
+    onTimingInteractionChange(true);
   }
 
   function moveTimingDrag(event: ReactPointerEvent<HTMLElement>) {
@@ -333,6 +369,7 @@ export function KirakaraReviewEditor({
 
     timingDrag.current = null;
     setActiveDrag(null);
+    onTimingInteractionChange(false);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -341,15 +378,111 @@ export function KirakaraReviewEditor({
       onChange(canceled ? drag.baseTimeline : drag.latestTimeline);
     }
     if (drag.moved && !canceled) {
-      onSeek(timingDragPreviewMs(
+      onSeek(timingDragSeekMs(
         drag.latestTimeline,
         drag.lineIndex,
         drag.target,
+        previewLeadMs,
       ));
     }
   }
 
-  if (!line) return null;
+  function adjustMoraBoundary(boundaryIndex: number, boundaryMs: number, direction: -1 | 1) {
+    onTimingInteractionChange(true);
+    const updated = updateMoraBoundary(
+      timeline,
+      currentLineIndex,
+      boundaryIndex,
+      boundaryMs + direction * stepMs,
+    );
+    onChange(updated);
+    onSeek(previewSeekMs(
+      timingDragPreviewMs(updated, currentLineIndex, { kind: "mora-boundary", boundaryIndex }),
+      previewLeadMs,
+      timeline.durationMs,
+    ));
+    onTimingInteractionChange(false);
+  }
+
+  function adjustLineEdge(edge: "start" | "end", direction: -1 | 1) {
+    onTimingInteractionChange(true);
+    const updated = applyLineEdgeOffset(timeline, currentLineIndex, edge, direction * stepMs);
+    onChange(updated);
+    onSeek(previewSeekMs(
+      timingDragPreviewMs(updated, currentLineIndex, { kind: "line-edge", edge }),
+      previewLeadMs,
+      timeline.durationMs,
+    ));
+    onTimingInteractionChange(false);
+  }
+
+  function boundaryTooltip(target: TimingBoundaryTarget, milliseconds: number) {
+    const selected = selectedBoundary?.kind === target.kind
+      && (target.kind !== "mora"
+        || (selectedBoundary.kind === "mora" && selectedBoundary.boundaryIndex === target.boundaryIndex));
+    if (!selected) return null;
+    return (
+      <span
+        data-time-boundary-tooltip="true"
+        className="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded bg-foreground px-2 py-1 text-[11px] font-medium tabular-nums text-background shadow-sm"
+      >
+        {formatPlaybackSeconds(milliseconds)}
+      </span>
+    );
+  }
+
+  function lineSelectors() {
+    return (
+      <>
+        <div
+          data-desktop-lyric-list="true"
+          className="mt-4 hidden max-h-48 overflow-y-auto rounded-md border md:block"
+        >
+          {lineOptions.map((option) => (
+            <button
+              key={option.value}
+              ref={(element) => { lyricItemRefs.current[option.value] = element; }}
+              type="button"
+              data-lyric-line={option.value}
+              aria-current={activeLineIndex === option.value ? "true" : undefined}
+              onClick={() => selectLine(option.value)}
+              className={`focus-ring block w-full border-b px-3 py-2 text-left text-sm last:border-b-0 ${
+                activeLineIndex === option.value ? "bg-primary/10 font-semibold text-primary" : "hover:bg-muted"
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <label
+          data-current-line-selector="true"
+          className="mt-4 block min-w-0 text-xs font-medium text-muted-foreground md:hidden"
+        >
+          当前歌词行
+          <select
+            className="focus-ring mt-1 block w-full rounded-md border bg-background px-3 py-2.5 text-sm text-foreground"
+            value={activeLineIndex ?? ""}
+            onChange={(event) => selectLine(Number(event.target.value))}
+          >
+            <option value="" disabled>请选择歌词行</option>
+            {lineOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+      </>
+    );
+  }
+
+  if (!line || activeLineIndex === null) {
+    return (
+      <section aria-labelledby="timeline-review-heading">
+        <h3 id="timeline-review-heading" className="text-base font-bold">时间轴检查</h3>
+        {lineSelectors()}
+        <p className="mt-4 text-sm text-muted-foreground">请选择歌词行后开始调整时间轴。</p>
+      </section>
+    );
+  }
   const lineDuration = Math.max(1, line.endMs - line.startMs);
 
   return (
@@ -370,21 +503,7 @@ export function KirakaraReviewEditor({
         </div>
       </div>
 
-      <label
-        data-current-line-selector="true"
-        className="mt-4 block min-w-0 text-xs font-medium text-muted-foreground"
-      >
-        当前歌词行
-        <select
-          className="focus-ring mt-1 block w-full rounded-md border bg-background px-3 py-2.5 text-sm text-foreground"
-          value={activeLineIndex}
-          onChange={(event) => selectLine(Number(event.target.value))}
-        >
-          {lineOptions.map((option) => (
-            <option key={option.value} value={option.value}>{option.label}</option>
-          ))}
-        </select>
-      </label>
+      {lineSelectors()}
 
       <div
         data-review-panels="true"
@@ -446,6 +565,7 @@ export function KirakaraReviewEditor({
                       type="button"
                       draggable={false}
                       data-mora-boundary={boundaryIndex}
+                      data-time-boundary-kind="mora"
                       data-mora-handle-lane={lane}
                       aria-label={`调整第 ${boundaryIndex + 1} 个 Mora 分界`}
                       title={`调整 ${segment.label} 后的 Mora 分界`}
@@ -460,17 +580,19 @@ export function KirakaraReviewEditor({
                         boundaryIndex,
                         baseTimeMs: segment.endMs,
                       })}
+                      onFocus={() => setSelectedBoundary({ kind: "mora", boundaryIndex })}
+                      onBlur={() => setSelectedBoundary(null)}
                       onPointerMove={moveTimingDrag}
                       onKeyDown={(event) => {
                         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
                         event.preventDefault();
-                        onChange(updateMoraBoundary(timeline, activeLineIndex, boundaryIndex,
-                          segment.endMs + (event.key === "ArrowLeft" ? -stepMs : stepMs)));
+                        adjustMoraBoundary(boundaryIndex, segment.endMs, event.key === "ArrowLeft" ? -1 : 1);
                       }}
                       onPointerUp={finishTimingDrag}
                       onPointerCancel={(event) => finishTimingDrag(event, true)}
                       onLostPointerCapture={(event) => finishTimingDrag(event, true)}
                     >
+                      {boundaryTooltip({ kind: "mora", boundaryIndex }, segment.endMs)}
                       <GripVertical className="size-3.5" />
                       <span
                         className="pointer-events-none absolute left-1/2 top-full w-px -translate-x-1/2 bg-current opacity-35"
@@ -486,6 +608,7 @@ export function KirakaraReviewEditor({
                   type="button"
                   draggable={false}
                   data-line-edge={edge}
+                  data-time-boundary-kind={edge === "start" ? "line-start" : "line-end"}
                   aria-label={`调整当前歌词行的${edge === "start" ? "开始" : "结束"}时间`}
                   title={edge === "start" ? "调整句首" : "调整句尾"}
                   className={`focus-ring absolute z-30 flex h-12 w-5 touch-none select-none cursor-ew-resize items-center justify-center text-primary ${
@@ -493,17 +616,22 @@ export function KirakaraReviewEditor({
                   }`}
                   style={{ top: `${moraSegmentTop - 4}px` }}
                   onPointerDown={(event) => startTimingDrag(event, { kind: "line-edge", edge })}
+                  onFocus={() => setSelectedBoundary({ kind: edge === "start" ? "line-start" : "line-end" })}
+                  onBlur={() => setSelectedBoundary(null)}
                   onPointerMove={moveTimingDrag}
                   onKeyDown={(event) => {
                     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
                     event.preventDefault();
-                    onChange(applyLineEdgeOffset(timeline, activeLineIndex, edge,
-                      event.key === "ArrowLeft" ? -stepMs : stepMs));
+                    adjustLineEdge(edge, event.key === "ArrowLeft" ? -1 : 1);
                   }}
                   onPointerUp={finishTimingDrag}
                   onPointerCancel={(event) => finishTimingDrag(event, true)}
                   onLostPointerCapture={(event) => finishTimingDrag(event, true)}
                 >
+                  {boundaryTooltip(
+                    { kind: edge === "start" ? "line-start" : "line-end" },
+                    edge === "start" ? line.startMs : line.endMs,
+                  )}
                   <GripVertical className="size-4" />
                 </button>
               ))}
@@ -536,37 +664,35 @@ export function KirakaraReviewEditor({
             <button
               type="button"
               className="focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md border px-3 text-sm font-semibold hover:bg-muted sm:col-span-2"
-              onClick={() => onSeek(line.startMs)}
+              onClick={() => onSeek(previewSeekMs(line.startMs, previewLeadMs, timeline.durationMs))}
             >
               <RotateCcw className="size-4" />
               定位预览
             </button>
           </div>
 
-          <div className="mt-3 flex flex-wrap items-end gap-3">
+          <div data-timing-adjustment-row="true" className="mt-3 flex flex-wrap items-end gap-3">
             <label className="text-xs font-medium text-muted-foreground">微调步长
               <select aria-label="微调步长" value={stepMs} onChange={event => setStepMs(Number(event.target.value))}
                 className="focus-ring mt-1 block h-9 rounded-md border bg-background px-2 text-sm text-foreground">
                 {[1, 10, 25, 50, 100].map(value => <option key={value} value={value}>{value} ms</option>)}
               </select>
             </label>
-            {(["start", "end", "line"] as const).map(target => <div key={target} className="text-xs text-muted-foreground">
-              {target === "start" ? "句首" : target === "end" ? "句尾" : "整句"}
+            {(["line"] as const).map(target => <div key={target} className="text-xs text-muted-foreground">
+              整句
               <div className="mt-1 flex gap-1">
                 {([-1, 1] as const).map(direction => {
-                  const label = `${target === "start" ? "句首" : target === "end" ? "句尾" : "整句"}${direction < 0 ? "提前" : "延后"}`;
+                  const label = `整句${direction < 0 ? "提前" : "延后"}`;
                   return <button key={direction} type="button" title={label} aria-label={label}
                     className="focus-ring inline-flex size-9 items-center justify-center rounded-sm border hover:bg-muted"
-                    onClick={() => changeRange(line.startMs + (target === "end" ? 0 : direction * stepMs), line.endMs + (target === "start" ? 0 : direction * stepMs))}>
+                    onClick={() => changeRange(line.startMs + direction * stepMs, line.endMs + direction * stepMs)}>
                     {direction < 0 ? <Minus className="size-4" /> : <Plus className="size-4" />}
                   </button>;
                 })}
               </div>
             </div>)}
-          </div>
-
-          <div className="mt-4 grid gap-3 border-t pt-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-            <label className="text-xs font-medium text-muted-foreground">
+            <div data-timeline-offset-group="true" className="flex min-w-0 flex-1 flex-wrap items-end gap-2 md:ml-auto md:max-w-md">
+            <label className="min-w-40 flex-1 text-xs font-medium text-muted-foreground">
               整体偏移（秒，可为负数）
               <input
                 type="number"
@@ -584,6 +710,7 @@ export function KirakaraReviewEditor({
               <TimerReset className="size-4" />
               应用偏移
             </button>
+            </div>
           </div>
         </section>
 

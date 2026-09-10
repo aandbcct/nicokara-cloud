@@ -115,3 +115,117 @@ describe("KirakaraPreview", () => {
     expect(html).not.toContain("xl:grid-cols-[minmax(0,1fr)_minmax(16rem,20rem)]");
   });
 });
+
+describe("subtitle playback control requirements", () => {
+  it("REQ-FOLLOW-01 allows automatic following while playback is active", async () => {
+    const preview = await loadPreview();
+    expect(preview?.shouldFollowPlayback(true, false)).toBe(true);
+  });
+
+  it("REQ-FOLLOW-02 prevents automatic following while playback is paused", async () => {
+    const preview = await loadPreview();
+    expect(preview?.shouldFollowPlayback(false, false)).toBe(false);
+  });
+
+  it("REQ-PLAY-04 gives a timing interaction priority over automatic following", async () => {
+    const preview = await loadPreview();
+    expect(preview?.shouldFollowPlayback(true, true)).toBe(false);
+  });
+
+  it("REQ-SELECT-02 seeks without calling play or pause", async () => {
+    const preview = await loadPreview();
+    const video = { currentTime: 0, duration: 5, play: vi.fn(), pause: vi.fn() };
+    preview?.seekVideoWithoutPlaybackChange(video, 2900);
+    expect(video.play).not.toHaveBeenCalled();
+    expect(video.pause).not.toHaveBeenCalled();
+  });
+
+  it("REQ-PLAY-03 preserves a playing video's state while seeking", async () => {
+    const preview = await loadPreview();
+    const video = { currentTime: 1, duration: 5, pause: vi.fn() };
+    preview?.seekVideoWithoutPlaybackChange(video, 2900);
+    expect(video.pause).not.toHaveBeenCalled();
+  });
+
+  it("REQ-RATE-02 decreases the playback rate for X", async () => {
+    const preview = await loadPreview();
+    const editing = await import("@/lib/timeline-editing");
+    expect(preview?.playbackRateAfterShortcut(editing.PlaybackShortcut.RateDown, 1, 0.9)).toBe(0.9);
+  });
+
+  it("REQ-RATE-03 increases the playback rate for C", async () => {
+    const preview = await loadPreview();
+    const editing = await import("@/lib/timeline-editing");
+    expect(preview?.playbackRateAfterShortcut(editing.PlaybackShortcut.RateUp, 1, 0.9)).toBe(1.1);
+  });
+
+  it("REQ-RATE-04-A toggles from 1.0x to the last non-default rate", async () => {
+    const preview = await loadPreview();
+    const editing = await import("@/lib/timeline-editing");
+    expect(preview?.playbackRateAfterShortcut(editing.PlaybackShortcut.RateToggle, 1, 0.8)).toBe(0.8);
+  });
+
+  it("REQ-RATE-04-B toggles a non-default rate back to 1.0x", async () => {
+    const preview = await loadPreview();
+    const editing = await import("@/lib/timeline-editing");
+    expect(preview?.playbackRateAfterShortcut(editing.PlaybackShortcut.RateToggle, 0.8, 0.8)).toBe(1);
+  });
+
+  it("REQ-RATE-06 defines a one-second playback rate notice", async () => {
+    const preview = await loadPreview();
+    expect(preview?.RATE_NOTICE_DURATION_MS).toBe(1000);
+  });
+
+  it("REQ-RATE-07 renders the playback rate notice as a DOM overlay", async () => {
+    const preview = await loadPreview();
+    expect(preview).not.toBeNull();
+    if (!preview) return;
+    const html = renderToStaticMarkup(<preview.PlaybackRateNotice rate={0.8} />);
+    expect(html).toContain('data-playback-rate-notice="true"');
+  });
+
+  it("REQ-RATE-11 initializes the page playback rate at 1.0x", async () => {
+    const preview = await loadPreview();
+    expect(preview).not.toBeNull();
+    if (!preview) return;
+    rememberLocalVideo("job-rate-default", new File(["video"], "song.mp4"));
+    const html = renderToStaticMarkup(<preview.KirakaraPreview jobId="job-rate-default" expectedVideoName="song.mp4" />);
+    expect(html).toContain('<option value="1" selected="">1.0×</option>');
+  });
+
+  it("REQ-SET-01 renders timing settings inside the workbench", async () => {
+    const preview = await loadPreview();
+    expect(preview).not.toBeNull();
+    if (!preview) return;
+    rememberLocalVideo("job-settings", new File(["video"], "song.mp4"));
+    const html = renderToStaticMarkup(<preview.KirakaraPreview jobId="job-settings" expectedVideoName="song.mp4" />);
+    expect(html).toContain('data-timing-settings="true"');
+  });
+
+  it("REQ-VIDEO-TIME-01 renders current video time beside playback controls", async () => {
+    const preview = await loadPreview();
+    expect(preview).not.toBeNull();
+    if (!preview) return;
+    rememberLocalVideo("job-time", new File(["video"], "song.mp4"));
+    const html = renderToStaticMarkup(<preview.KirakaraPreview jobId="job-time" expectedVideoName="song.mp4" />);
+    expect(html).toContain('data-current-video-time="true"');
+  });
+
+  it("REQ-VIDEO-TIME-04 renders video time as read-only output", async () => {
+    const preview = await loadPreview();
+    expect(preview).not.toBeNull();
+    if (!preview) return;
+    rememberLocalVideo("job-time-output", new File(["video"], "song.mp4"));
+    const html = renderToStaticMarkup(<preview.KirakaraPreview jobId="job-time-output" expectedVideoName="song.mp4" />);
+    expect(html).toContain('<output data-current-video-time="true"');
+  });
+
+  it("REQ-VIDEO-TIME-05 uses tabular numerals for current video time", async () => {
+    const preview = await loadPreview();
+    expect(preview).not.toBeNull();
+    if (!preview) return;
+    rememberLocalVideo("job-time-style", new File(["video"], "song.mp4"));
+    const html = renderToStaticMarkup(<preview.KirakaraPreview jobId="job-time-style" expectedVideoName="song.mp4" />);
+    expect(html).toMatch(/data-current-video-time="true"[^>]+tabular-nums/);
+  });
+});
