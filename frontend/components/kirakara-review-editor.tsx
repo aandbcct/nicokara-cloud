@@ -2,6 +2,7 @@
 
 import {
   ChevronDown,
+  GripVertical,
   Languages,
   RotateCcw,
   TimerReset,
@@ -603,7 +604,7 @@ export function KirakaraReviewEditor({
               ref={timelineTrack}
               data-mora-timeline="true"
               data-boundary-gap-px={minimumBoundaryGapPx}
-              className="relative rounded-md border border-border/80 bg-muted/20 shadow-inner shadow-foreground/[0.025]"
+              className="relative rounded-sm border bg-muted/40"
               style={{ height: `${MORA_TRACK_HEIGHT_PX}px` }}
               aria-label={`当前歌词行时间轴：${line.text}`}
             >
@@ -614,7 +615,7 @@ export function KirakaraReviewEditor({
                 data-playback-shortcuts="true"
                 title="整句平移"
                 aria-label="整句平移"
-                className="focus-ring group absolute left-1/2 top-0 z-20 flex h-4 w-20 -translate-x-1/2 -translate-y-1/2 touch-none select-none cursor-grab items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-primary focus-visible:text-primary active:cursor-grabbing"
+                className="focus-ring absolute left-1/2 top-0 z-20 flex h-5 w-12 -translate-x-1/2 -translate-y-1/2 touch-none select-none cursor-grab items-center justify-center text-primary active:cursor-grabbing"
                 onPointerDown={(event) => startTimingDrag(event, { kind: "line-move" })}
                 onPointerMove={moveTimingDrag}
                 onPointerUp={finishTimingDrag}
@@ -626,11 +627,7 @@ export function KirakaraReviewEditor({
                   adjustLineMove(event.key === "ArrowLeft" ? -1 : 1);
                 }}
               >
-                <span className="flex items-center gap-1 rounded-full border border-border/80 bg-background/95 px-2 py-1 shadow-sm transition-colors group-hover:border-primary/40 group-focus-visible:border-primary/50">
-                  <span className="size-1 rounded-full bg-current" />
-                  <span className="size-1 rounded-full bg-current" />
-                  <span className="size-1 rounded-full bg-current" />
-                </span>
+                <GripVertical data-line-control-dot="move" className="size-4 rotate-90" />
               </button>
 
               {(["start", "end"] as const).map((edge) => (
@@ -643,7 +640,7 @@ export function KirakaraReviewEditor({
                   data-playback-shortcuts="true"
                   aria-label={`调整当前歌词行的${edge === "start" ? "开始" : "结束"}时间`}
                   title={edge === "start" ? "整句开始（按比例拉伸）" : "整句结束（按比例拉伸）"}
-                  className={`focus-ring group absolute top-0 z-30 flex h-5 w-7 -translate-y-1/2 touch-none select-none cursor-ew-resize items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-primary focus-visible:text-primary ${
+                  className={`focus-ring absolute top-0 z-30 flex h-6 w-5 -translate-y-1/2 touch-none select-none cursor-ew-resize items-center justify-center text-primary ${
                     edge === "start"
                       ? "left-0 -translate-x-1/2"
                       : "right-0 translate-x-1/2"
@@ -665,10 +662,7 @@ export function KirakaraReviewEditor({
                     { kind: edge === "start" ? "line-start" : "line-end" },
                     edge === "start" ? line.startMs : line.endMs,
                   )}
-                  <span className="flex items-center gap-0.5 rounded-full border border-border/80 bg-background/95 px-1.5 py-1 shadow-sm transition-colors group-hover:border-primary/40 group-focus-visible:border-primary/50">
-                    <span className="size-1 rounded-full bg-current" />
-                    <span className="size-1 rounded-full bg-current" />
-                  </span>
+                  <GripVertical data-line-control-dot={edge} className="size-4" />
                 </button>
               ))}
 
@@ -696,14 +690,14 @@ export function KirakaraReviewEditor({
                     data-mora-segment={segment.kind === "mora" ? segment.key : undefined}
                     data-unit-segment={segment.kind === "unit" ? segment.key : undefined}
                     aria-pressed={segment.kind === "mora" ? selected : undefined}
-                    className={`focus-ring absolute flex min-w-px items-center overflow-hidden rounded-md border text-xs font-semibold shadow-sm transition-[background-color,border-color,box-shadow] ${
+                    className={`focus-ring absolute flex min-w-px items-center overflow-hidden border text-xs font-semibold ${
                       segment.kind === "unit"
-                        ? "border-border/70 bg-background/80 text-muted-foreground"
+                        ? "border-border bg-background text-muted-foreground"
                         : selected || affected
-                          ? "z-10 border-primary/55 bg-primary/20 text-primary shadow-primary/10 ring-1 ring-primary/15"
+                          ? "z-10 border-primary bg-primary/25 text-primary"
                           : index % 2 === 0
-                            ? "border-primary/20 bg-primary/10 text-foreground hover:border-primary/35 hover:bg-primary/15"
-                            : "border-border/70 bg-card/90 text-foreground hover:border-primary/25 hover:bg-muted/80"
+                            ? "border-primary/45 bg-primary/20 text-foreground hover:bg-primary/25"
+                            : "border-border bg-card text-foreground hover:bg-muted"
                     }`}
                     style={{
                       left: `${left}%`,

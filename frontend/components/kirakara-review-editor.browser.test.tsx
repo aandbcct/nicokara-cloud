@@ -217,6 +217,22 @@ describe("KirakaraReviewEditor browser behavior", () => {
     expect(wrapper?.className).not.toContain("px-2");
   });
 
+  it("REQ-STYLE-LAYOUT-03 restores the flat timeline styling from the requested baseline", () => {
+    const { container } = renderEditor();
+    const track = container.querySelector('[data-mora-timeline="true"]');
+    const mora = container.querySelector('[data-mora-segment]');
+    expect(track?.className).toContain("bg-muted/40");
+    expect(track?.className).not.toContain("shadow");
+    expect(mora?.className).not.toContain("rounded");
+    expect(mora?.className).not.toContain("shadow");
+  });
+
+  it("REQ-OPERATION-03 renders the three whole-line controls as simple dot handles", () => {
+    const { container } = renderEditor();
+    expect(container.querySelectorAll('[data-line-control-dot]')).toHaveLength(3);
+    expect(container.querySelector('[data-line-move="true"]')?.className).not.toContain("rounded-full");
+  });
+
   it("REQ-DENSITY-03 renders a sufficiently spaced boundary as directly draggable", async () => {
     const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 400 } as DOMRect);
     try {
