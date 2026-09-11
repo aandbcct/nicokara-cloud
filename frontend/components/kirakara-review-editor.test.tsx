@@ -99,13 +99,15 @@ describe("KirakaraReviewEditor", () => {
     expect(html).toContain('value="きょう"');
     expect(html).toContain("设置时间轴");
     expect(html.match(/data-mora-segment=/g)).toHaveLength(2);
-    expect(html).toContain('data-mora-boundary="0"');
     expect(html).toContain("きょ");
     expect(html).toContain("う");
     expect(html).not.toContain('data-timeline-line-draggable="true"');
     expect(html).not.toContain("拖动第 1 句");
     expect(html).toContain('data-line-edge="start"');
     expect(html).toContain('data-line-edge="end"');
+    expect(html).toContain('data-line-move="true"');
+    expect(html).toContain("整句开始（按比例拉伸）");
+    expect(html).toContain("整句平移");
     expect(html).toContain("cursor-ew-resize");
     expect(html).toContain("touch-none");
     expect(html).toContain("开始时间");
@@ -135,46 +137,11 @@ describe("KirakaraReviewEditor", () => {
     expect(html).not.toContain("<details open");
   });
 
-  it("separates crowded mora boundary handles into visual lanes", () => {
-    const denseTimeline: KirakaraTimeline = {
-      ...timeline,
-      lines: [{
-        ...timeline.lines[0],
-        text: "あいうえお",
-        reading: "あいうえお",
-        units: [{
-          text: "あいうえお",
-          reading: "あいうえお",
-          startMs: 1000,
-          endMs: 2000,
-          moras: [
-            { reading: "あ", startMs: 1000, endMs: 1500, matched: true },
-            { reading: "い", startMs: 1500, endMs: 1500, matched: false },
-            { reading: "う", startMs: 1500, endMs: 1500, matched: false },
-            { reading: "え", startMs: 1500, endMs: 1500, matched: false },
-            { reading: "お", startMs: 1500, endMs: 2000, matched: true },
-          ],
-        }],
-      }],
-    };
+  it("REQ-DENSITY-01 enables direct dragging when both pixel gaps are sufficient", () => {
+    expect([...ReviewEditor.directlyDraggableBoundaryIndexes([0, 25, 50, 80], 20)]).toEqual([0, 1]);
+  });
 
-    const html = renderToStaticMarkup(
-      <ReviewEditor.KirakaraReviewEditor
-        timeline={denseTimeline}
-        editingLineIndex={0}
-        previewLeadMs={100}
-        onEditingLineChange={vi.fn()}
-        onChange={vi.fn()}
-        onSeek={vi.fn()}
-      />,
-    );
-
-    expect(html).toContain('data-mora-handle-lane="0"');
-    expect(html).toContain('data-mora-handle-lane="1"');
-    expect(html).toContain('data-mora-handle-lane="2"');
-    expect(html).toContain('data-mora-handle-lane="3"');
-    expect(html.match(/data-mora-boundary="\d"[^>]+style="left:50%/g)).toHaveLength(4);
-    expect(html).toContain("调整第 1 个 Mora 分界");
-    expect(html).toContain("调整第 4 个 Mora 分界");
+  it("REQ-DENSITY-02 limits dense mode to locally overlapping boundaries", () => {
+    expect([...ReviewEditor.directlyDraggableBoundaryIndexes([0, 25, 35, 70, 100], 20)]).toEqual([2]);
   });
 });

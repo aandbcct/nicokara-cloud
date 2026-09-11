@@ -69,14 +69,15 @@ enum WorkbenchSideTab {
 }
 
 export function scrollLyricWithinNavigator(
-  navigator: Pick<HTMLElement, "clientHeight" | "scrollTop">,
-  item: Pick<HTMLElement, "offsetHeight" | "offsetTop">,
+  navigator: Pick<HTMLElement, "getBoundingClientRect" | "scrollTop">,
+  item: Pick<HTMLElement, "getBoundingClientRect">,
 ) {
-  const itemBottom = item.offsetTop + item.offsetHeight;
-  if (item.offsetTop < navigator.scrollTop) {
-    navigator.scrollTop = item.offsetTop;
-  } else if (itemBottom > navigator.scrollTop + navigator.clientHeight) {
-    navigator.scrollTop = Math.max(0, itemBottom - navigator.clientHeight);
+  const navigatorRect = navigator.getBoundingClientRect();
+  const itemRect = item.getBoundingClientRect();
+  if (itemRect.top < navigatorRect.top) {
+    navigator.scrollTop = Math.max(0, navigator.scrollTop - (navigatorRect.top - itemRect.top));
+  } else if (itemRect.bottom > navigatorRect.bottom) {
+    navigator.scrollTop += itemRect.bottom - navigatorRect.bottom;
   }
 }
 

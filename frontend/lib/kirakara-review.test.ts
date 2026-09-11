@@ -9,6 +9,7 @@ import {
   timelineReviewPayload,
   updateLineRange,
   updateMoraBoundary,
+  updateOuterMoraEdge,
   updateUnitReading,
   updateUnitText,
 } from "./kirakara-review";
@@ -132,6 +133,22 @@ describe("Kirakara timeline review", () => {
       endMs: 5000,
     });
     expect(updated.durationMs).toBe(5000);
+  });
+
+  it("REQ-MORA-EDGE-01 adjusts the first Mora start without resizing the line", () => {
+    const updated = updateOuterMoraEdge(timeline, 0, "start", 1200);
+
+    expect(updated.lines[0]).toMatchObject({ startMs: 1000, endMs: 3000 });
+    expect(updated.lines[0].units[0].moras[0]).toMatchObject({ startMs: 1200, endMs: 1500 });
+    expect(updated.lines[0].units[0].moras[1]).toEqual(timeline.lines[0].units[0].moras[1]);
+  });
+
+  it("REQ-MORA-EDGE-02 adjusts the last Mora end without resizing the line", () => {
+    const updated = updateOuterMoraEdge(timeline, 0, "end", 2800);
+
+    expect(updated.lines[0]).toMatchObject({ startMs: 1000, endMs: 3000 });
+    expect(updated.lines[0].units.flatMap((unit) => unit.moras).at(-1)).toMatchObject({ endMs: 2800 });
+    expect(updated.lines[0].units[0].moras[0]).toEqual(timeline.lines[0].units[0].moras[0]);
   });
 
   it("keeps a dragged line between its neighboring lines", () => {

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { KirakaraTimeline } from "@/lib/kirakara-timeline";
@@ -61,6 +61,10 @@ function renderEditor(overrides: EditorOverrides = {}) {
 describe("KirakaraReviewEditor browser behavior", () => {
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn();
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn(() => ({ matches: false })),
+    });
   });
 
   afterEach(() => cleanup());
@@ -86,8 +90,10 @@ describe("KirakaraReviewEditor browser behavior", () => {
 
   it("REQ-TIME-01 exposes line-start, Mora, and line-end boundary controls", () => {
     const { container } = renderEditor();
+    fireEvent.click(screen.getByRole("button", { name: "きょ" }));
     expect(container.querySelector('[data-time-boundary-kind="line-start"]')).toBeTruthy();
     expect(container.querySelector('[data-time-boundary-kind="mora"]')).toBeTruthy();
+    expect(container.querySelector('[data-time-boundary-kind="mora-start"]')).toBeTruthy();
     expect(container.querySelector('[data-time-boundary-kind="line-end"]')).toBeTruthy();
   });
 
@@ -122,7 +128,14 @@ describe("KirakaraReviewEditor browser behavior", () => {
 
   it("REQ-TIME-06 represents all boundary controls with one selection attribute", () => {
     const { container } = renderEditor();
-    expect(container.querySelectorAll("[data-time-boundary-kind]")).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "きょ" }));
+    expect([...container.querySelectorAll("[data-time-boundary-kind]")].map((element) =>
+      element.getAttribute("data-time-boundary-kind"))).toEqual([
+      "line-start",
+      "line-end",
+      "mora",
+      "mora-start",
+    ]);
   });
 
   it("REQ-LEAD-04 calculates drag completion seek from the adjusted boundary", () => {
@@ -132,8 +145,74 @@ describe("KirakaraReviewEditor browser behavior", () => {
   it("REQ-LEAD-05 seeks with preview lead after a keyboard boundary adjustment", () => {
     const onSeek = vi.fn();
     renderEditor({ onSeek });
+    fireEvent.click(screen.getByRole("button", { name: "きょ" }));
     fireEvent.keyDown(screen.getByRole("button", { name: "调整第 1 个 Mora 分界" }), { key: "ArrowRight" });
     expect(onSeek).toHaveBeenCalledWith(1510);
+  });
+
+  it("REQ-MORA-SELECT-01 reveals only the selected outer Mora boundary", () => {
+    const { container } = renderEditor();
+    expect(container.querySelector('[data-mora-outer-edge="start"]')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "きょ" }));
+    expect(container.querySelector('[data-mora-outer-edge="start"]')).toBeTruthy();
+    expect(container.querySelector('[data-mora-outer-edge="end"]')).toBeNull();
+  });
+
+  it("REQ-INPUT-01 does not submit an incomplete line time while typing", () => {
+    const onChange = vi.fn();
+    renderEditor({ onChange });
+    fireEvent.change(screen.getByLabelText("开始时间（秒）"), { target: { value: "1.2" } });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("REQ-INPUT-02 submits the complete line time on blur", () => {
+    const onChange = vi.fn();
+    renderEditor({ onChange });
+    const input = screen.getByLabelText("开始时间（秒）");
+    fireEvent.change(input, { target: { value: "1.2" } });
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      lines: expect.arrayContaining([expect.objectContaining({ startMs: 1200, endMs: 2000 })]),
+    }));
+  });
+
+  it("REQ-INPUT-03 submits a selected Mora time only after blur", () => {
+    const onChange = vi.fn();
+    renderEditor({ onChange });
+    fireEvent.click(screen.getByRole("button", { name: "きょ" }));
+    const input = screen.getByLabelText("Mora 开始（秒）");
+    fireEvent.change(input, { target: { value: "1.1" } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      lines: expect.arrayContaining([expect.objectContaining({ startMs: 1000, endMs: 2000 })]),
+    }));
+  });
+
+  it("REQ-OPERATION-01 separates whole-line controls from the Mora color blocks", () => {
+    const { container } = renderEditor();
+    expect(container.querySelector('[data-line-move="true"]')?.getAttribute("title")).toBe("整句平移");
+    expect(container.querySelector('[data-line-edge="start"]')?.getAttribute("title")).toBe("整句开始（按比例拉伸）");
+    expect(container.querySelector('[data-mora-segment]')?.getAttribute("title")).toContain("选择 Mora");
+  });
+
+  it("REQ-DENSITY-03 renders a sufficiently spaced boundary as directly draggable", async () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 400 } as DOMRect);
+    try {
+      const { container } = renderEditor();
+      await waitFor(() => expect(container.querySelector('[data-density-mode="direct"]')).toBeTruthy());
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it("REQ-DENSITY-04 uses the larger boundary gap for touch input", () => {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn(() => ({ matches: true })),
+    });
+    const { container } = renderEditor();
+    expect(container.querySelector('[data-mora-timeline="true"]')?.getAttribute("data-boundary-gap-px")).toBe("32");
   });
 
   it("REQ-LAYOUT-01 omits duplicate line-start nudge buttons", () => {

@@ -18,10 +18,12 @@ import {
 
 import {
   applyLineEdgeOffset,
+  applyLineOffset,
   applyTimelineOffset,
   timelineDragOffsetMs,
   updateLineRange,
   updateMoraBoundary,
+  updateOuterMoraEdge,
   updateUnitReading,
   updateUnitText,
 } from "@/lib/kirakara-review";
@@ -33,11 +35,14 @@ import { formatPlaybackSeconds, previewSeekMs, type PlaybackRange } from "@/lib/
 
 type TimingDragTarget =
   | { kind: "line-edge"; edge: "start" | "end" }
-  | { kind: "mora-boundary"; boundaryIndex: number; baseTimeMs: number };
+  | { kind: "line-move" }
+  | { kind: "mora-boundary"; boundaryIndex: number; baseTimeMs: number }
+  | { kind: "mora-outer-edge"; edge: "start" | "end"; baseTimeMs: number };
 
 type TimingBoundaryTarget =
   | { kind: "line-start" }
   | { kind: "mora"; boundaryIndex: number }
+  | { kind: "mora-outer"; edge: "start" | "end" }
   | { kind: "line-end" };
 
 type TimingDrag = {
@@ -58,22 +63,20 @@ type TimingSegment = {
   label: string;
   startMs: number;
   endMs: number;
+  moraIndex: number | null;
   boundaryIndex: number | null;
 };
 
 type MoraBoundaryMarker = {
-  segment: TimingSegment;
   boundaryIndex: number;
   leftPercent: number;
-  lane: number;
 };
 
-const MORA_HANDLE_GAP_PERCENT = 7;
-const MORA_HANDLE_TOP_PX = 4;
-const MORA_HANDLE_LANE_GAP_PX = 22;
-const MORA_SEGMENT_TOP_PX = 76;
-const MORA_SEGMENT_HEIGHT_PX = 40;
-const MORA_TRACK_BOTTOM_GAP_PX = 12;
+const MOUSE_BOUNDARY_GAP_PX = 20;
+const TOUCH_BOUNDARY_GAP_PX = 32;
+const MORA_SEGMENT_TOP_PX = 38;
+const MORA_SEGMENT_HEIGHT_PX = 48;
+const MORA_TRACK_HEIGHT_PX = 96;
 
 function seconds(milliseconds: number): string {
   return (milliseconds / 1000).toFixed(3);
@@ -95,6 +98,7 @@ function lineTimingSegments(line: KirakaraLine): TimingSegment[] {
         label: unit.reading || unit.text,
         startMs: unit.startMs,
         endMs: unit.endMs,
+        moraIndex: null,
         boundaryIndex: null,
       }];
     }
@@ -104,12 +108,9 @@ function lineTimingSegments(line: KirakaraLine): TimingSegment[] {
         key: `mora-${unitIndex}-${moraIndex}`,
         kind: "mora",
         label: mora.reading,
-        startMs: moraIndex === 0
-          ? unit.startMs
-          : unit.moras[moraIndex - 1].endMs,
-        endMs: moraIndex === unit.moras.length - 1
-          ? unit.endMs
-          : mora.endMs,
+        startMs: mora.startMs,
+        endMs: mora.endMs,
+        moraIndex: moraPosition,
         boundaryIndex: moraPosition < moraCount - 1 ? moraPosition : null,
       };
       moraPosition += 1;
@@ -123,12 +124,22 @@ export function timingDragPreviewMs(
   lineIndex: number,
   target:
     | { kind: "line-edge"; edge: "start" | "end" }
-    | { kind: "mora-boundary"; boundaryIndex: number },
+    | { kind: "line-move" }
+    | { kind: "mora-boundary"; boundaryIndex: number }
+    | { kind: "mora-outer-edge"; edge: "start" | "end" },
 ): number {
   const line = timeline.lines[lineIndex];
   if (!line) throw new RangeError("歌词行不存在");
   if (target.kind === "line-edge") {
     return target.edge === "start" ? line.startMs : line.endMs;
+  }
+
+  if (target.kind === "line-move") return line.startMs;
+  if (target.kind === "mora-outer-edge") {
+    const moras = line.units.flatMap((unit) => unit.moras);
+    const mora = target.edge === "start" ? moras[0] : moras.at(-1);
+    if (!mora) throw new RangeError("当前歌词行没有 Mora");
+    return target.edge === "start" ? mora.startMs : mora.endMs;
   }
 
   const boundary = lineTimingSegments(line).find(
@@ -144,7 +155,9 @@ export function timingDragSeekMs(
   lineIndex: number,
   target:
     | { kind: "line-edge"; edge: "start" | "end" }
-    | { kind: "mora-boundary"; boundaryIndex: number },
+    | { kind: "line-move" }
+    | { kind: "mora-boundary"; boundaryIndex: number }
+    | { kind: "mora-outer-edge"; edge: "start" | "end" },
   previewLeadMs: number,
 ): number {
   return previewSeekMs(
@@ -159,28 +172,55 @@ function moraBoundaryMarkers(
   lineStartMs: number,
   lineDurationMs: number,
 ): MoraBoundaryMarker[] {
-  const lastPositionByLane: number[] = [];
-
   return segments
     .filter(
       (segment) => segment.kind === "mora" && segment.boundaryIndex !== null,
     )
-    .map((segment) => {
-      const leftPercent = (segment.endMs - lineStartMs) / lineDurationMs * 100;
-      let lane = lastPositionByLane.findIndex(
-        (lastPosition) => leftPercent - lastPosition >= MORA_HANDLE_GAP_PERCENT,
-      );
-      if (lane < 0) {
-        lane = lastPositionByLane.length;
-      }
-      lastPositionByLane[lane] = leftPercent;
-      return {
-        segment,
-        boundaryIndex: segment.boundaryIndex as number,
-        leftPercent,
-        lane,
-      };
-    });
+    .map((segment) => ({
+      boundaryIndex: segment.boundaryIndex as number,
+      leftPercent: (segment.endMs - lineStartMs) / lineDurationMs * 100,
+    }));
+}
+
+export function directlyDraggableBoundaryIndexes(
+  boundaryPositionsPx: number[],
+  minimumGapPx: number,
+): Set<number> {
+  const direct = new Set<number>();
+  for (let index = 1; index < boundaryPositionsPx.length - 1; index += 1) {
+    const leftGap = boundaryPositionsPx[index] - boundaryPositionsPx[index - 1];
+    const rightGap = boundaryPositionsPx[index + 1] - boundaryPositionsPx[index];
+    if (leftGap >= minimumGapPx && rightGap >= minimumGapPx) direct.add(index - 1);
+  }
+  return direct;
+}
+
+function applyTimingDragTarget(
+  timeline: KirakaraTimeline,
+  lineIndex: number,
+  target: TimingDragTarget,
+  offsetMs: number,
+): KirakaraTimeline {
+  if (target.kind === "line-edge") {
+    return applyLineEdgeOffset(timeline, lineIndex, target.edge, offsetMs);
+  }
+  if (target.kind === "line-move") {
+    return applyLineOffset(timeline, lineIndex, offsetMs);
+  }
+  if (target.kind === "mora-outer-edge") {
+    return updateOuterMoraEdge(
+      timeline,
+      lineIndex,
+      target.edge,
+      target.baseTimeMs + offsetMs,
+    );
+  }
+  return updateMoraBoundary(
+    timeline,
+    lineIndex,
+    target.boundaryIndex,
+    target.baseTimeMs + offsetMs,
+  );
 }
 
 export function KirakaraReviewEditor({
@@ -209,7 +249,29 @@ export function KirakaraReviewEditor({
   const [stepMs, setStepMs] = useState(10);
   const [looping, setLooping] = useState(false);
   const [activeDrag, setActiveDrag] = useState<TimingDragTarget | null>(null);
-  const [selectedBoundary, setSelectedBoundary] = useState<TimingBoundaryTarget | null>(null);
+  const [selectedBoundary, setSelectedBoundary] = useState<{
+    lineIndex: number;
+    target: TimingBoundaryTarget;
+  } | null>(null);
+  const [selectedMora, setSelectedMora] = useState<{
+    lineIndex: number;
+    moraIndex: number;
+  } | null>(null);
+  const [trackWidthPx, setTrackWidthPx] = useState(0);
+  const [minimumBoundaryGapPx] = useState(() =>
+    typeof window !== "undefined"
+      && typeof window.matchMedia === "function"
+      && window.matchMedia("(pointer: coarse)").matches
+      ? TOUCH_BOUNDARY_GAP_PX
+      : MOUSE_BOUNDARY_GAP_PX,
+  );
+  const [rangeDraft, setRangeDraft] = useState<{
+    lineIndex: number;
+    sourceStartMs: number;
+    sourceEndMs: number;
+    start: string;
+    end: string;
+  } | null>(null);
   const timelineTrack = useRef<HTMLDivElement | null>(null);
   const timingDrag = useRef<TimingDrag | null>(null);
   const currentLineIndex = editingLineIndex ?? -1;
@@ -221,6 +283,19 @@ export function KirakaraReviewEditor({
     onLoop?.(looping && lineStartMs !== undefined && lineEndMs !== undefined ? { startMs: lineStartMs, endMs: lineEndMs } : null);
   }, [looping, lineStartMs, lineEndMs, onLoop]);
   useEffect(() => () => onLoop?.(null), [onLoop]);
+  useEffect(() => {
+    const track = timelineTrack.current;
+    if (!track) return;
+    const updateTrackWidth = () => {
+      if (timingDrag.current) return;
+      setTrackWidthPx(Math.round(track.getBoundingClientRect().width));
+    };
+    updateTrackWidth();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateTrackWidth);
+    observer.observe(track);
+    return () => observer.disconnect();
+  }, [editingLineIndex]);
   const timingSegments = useMemo(
     () => line ? lineTimingSegments(line) : [],
     [line],
@@ -235,17 +310,35 @@ export function KirakaraReviewEditor({
       : [],
     [line, timingSegments],
   );
-  const moraHandleLaneCount = boundaryMarkers.reduce(
-    (count, marker) => Math.max(count, marker.lane + 1),
-    0,
+  const directBoundaryIndexes = useMemo(
+    () => directlyDraggableBoundaryIndexes(
+      [
+        0,
+        ...boundaryMarkers.map((marker) => marker.leftPercent / 100 * trackWidthPx),
+        trackWidthPx,
+      ],
+      minimumBoundaryGapPx,
+    ),
+    [boundaryMarkers, minimumBoundaryGapPx, trackWidthPx],
   );
-  const moraSegmentTop = Math.max(
-    MORA_SEGMENT_TOP_PX,
-    MORA_HANDLE_TOP_PX + moraHandleLaneCount * MORA_HANDLE_LANE_GAP_PX + 6,
+  const moraSegments = timingSegments.filter(
+    (segment): segment is TimingSegment & { kind: "mora"; moraIndex: number } =>
+      segment.kind === "mora" && segment.moraIndex !== null,
   );
-  const moraTrackHeight = moraSegmentTop
-    + MORA_SEGMENT_HEIGHT_PX
-    + MORA_TRACK_BOTTOM_GAP_PX;
+  const selectedMoraSegment = selectedMora?.lineIndex === currentLineIndex
+    ? moraSegments.find((segment) => segment.moraIndex === selectedMora.moraIndex) ?? null
+    : null;
+  const currentRangeDraft = rangeDraft?.lineIndex === currentLineIndex
+    && rangeDraft.sourceStartMs === lineStartMs
+    && rangeDraft.sourceEndMs === lineEndMs
+    ? rangeDraft
+    : {
+        lineIndex: currentLineIndex,
+        sourceStartMs: lineStartMs ?? 0,
+        sourceEndMs: lineEndMs ?? 0,
+        start: lineStartMs === undefined ? "" : seconds(lineStartMs),
+        end: lineEndMs === undefined ? "" : seconds(lineEndMs),
+      };
 
   function changeRange(startMs: number, endMs: number) {
     try {
@@ -254,6 +347,16 @@ export function KirakaraReviewEditor({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "时间范围无效");
     }
+  }
+
+  function commitRangeDraft() {
+    const startMs = Number(currentRangeDraft.start) * 1000;
+    const endMs = Number(currentRangeDraft.end) * 1000;
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+      setError("请输入完整、有效的时间点");
+      return;
+    }
+    changeRange(startMs, endMs);
   }
 
   function applyOffset() {
@@ -300,9 +403,16 @@ export function KirakaraReviewEditor({
       moved: false,
     };
     setActiveDrag(target);
-    setSelectedBoundary(target.kind === "line-edge"
-      ? { kind: target.edge === "start" ? "line-start" : "line-end" }
-      : { kind: "mora", boundaryIndex: target.boundaryIndex });
+    const boundaryTarget = target.kind === "line-edge"
+      ? { kind: target.edge === "start" ? "line-start" : "line-end" } as const
+      : target.kind === "mora-boundary"
+        ? { kind: "mora", boundaryIndex: target.boundaryIndex } as const
+        : target.kind === "mora-outer-edge"
+          ? { kind: "mora-outer", edge: target.edge } as const
+          : null;
+    setSelectedBoundary(boundaryTarget
+      ? { lineIndex: currentLineIndex, target: boundaryTarget }
+      : null);
   }
 
   function moveTimingDrag(event: ReactPointerEvent<HTMLElement>) {
@@ -318,19 +428,12 @@ export function KirakaraReviewEditor({
       drag.trackWidth,
       drag.lineDuration,
     );
-    const updated = drag.target.kind === "line-edge"
-      ? applyLineEdgeOffset(
-          drag.baseTimeline,
-          drag.lineIndex,
-          drag.target.edge,
-          offsetMs,
-        )
-      : updateMoraBoundary(
-          drag.baseTimeline,
-          drag.lineIndex,
-          drag.target.boundaryIndex,
-          drag.target.baseTimeMs + offsetMs,
-        );
+    const updated = applyTimingDragTarget(
+      drag.baseTimeline,
+      drag.lineIndex,
+      drag.target,
+      offsetMs,
+    );
     drag.latestTimeline = updated;
     onChange(updated, `drag-${drag.pointerId}`);
   }
@@ -386,10 +489,54 @@ export function KirakaraReviewEditor({
     ));
   }
 
+  function moraEdgeTarget(
+    segment: TimingSegment & { kind: "mora"; moraIndex: number },
+    edge: "start" | "end",
+  ): TimingDragTarget {
+    if (edge === "start" && segment.moraIndex === 0) {
+      return { kind: "mora-outer-edge", edge, baseTimeMs: segment.startMs };
+    }
+    if (edge === "end" && segment.moraIndex === moraSegments.length - 1) {
+      return { kind: "mora-outer-edge", edge, baseTimeMs: segment.endMs };
+    }
+    return {
+      kind: "mora-boundary",
+      boundaryIndex: edge === "start" ? segment.moraIndex - 1 : segment.moraIndex,
+      baseTimeMs: edge === "start" ? segment.startMs : segment.endMs,
+    };
+  }
+
+  function changeMoraEdge(
+    segment: TimingSegment & { kind: "mora"; moraIndex: number },
+    edge: "start" | "end",
+    timeMs: number,
+  ) {
+    const target = moraEdgeTarget(segment, edge);
+    const currentTimeMs = edge === "start" ? segment.startMs : segment.endMs;
+    const updated = applyTimingDragTarget(
+      timeline,
+      currentLineIndex,
+      target,
+      timeMs - currentTimeMs,
+    );
+    onChange(updated);
+    onSeek(timingDragSeekMs(updated, currentLineIndex, target, previewLeadMs));
+  }
+
+  function selectTimingBoundary(target: TimingBoundaryTarget) {
+    setSelectedBoundary({ lineIndex: currentLineIndex, target });
+  }
+
   function boundaryTooltip(target: TimingBoundaryTarget, milliseconds: number) {
-    const selected = selectedBoundary?.kind === target.kind
-      && (target.kind !== "mora"
-        || (selectedBoundary.kind === "mora" && selectedBoundary.boundaryIndex === target.boundaryIndex));
+    const currentBoundary = selectedBoundary?.lineIndex === currentLineIndex
+      ? selectedBoundary.target
+      : null;
+    const selected = currentBoundary?.kind === target.kind
+      && (target.kind === "mora"
+        ? currentBoundary.kind === "mora" && currentBoundary.boundaryIndex === target.boundaryIndex
+        : target.kind === "mora-outer"
+          ? currentBoundary.kind === "mora-outer" && currentBoundary.edge === target.edge
+          : true);
     if (!selected) return null;
     return (
       <span
@@ -446,87 +593,28 @@ export function KirakaraReviewEditor({
             <div
               ref={timelineTrack}
               data-mora-timeline="true"
-              className="relative rounded-sm border bg-muted/40"
-              style={{ height: `${moraTrackHeight}px` }}
+              data-boundary-gap-px={minimumBoundaryGapPx}
+              className="relative rounded-sm border-2 border-primary/60 bg-muted/30"
+              style={{ height: `${MORA_TRACK_HEIGHT_PX}px` }}
               aria-label={`当前歌词行时间轴：${line.text}`}
             >
-              {timingSegments.map((segment, index) => {
-                const start = Math.max(line.startMs, Math.min(line.endMs, segment.startMs));
-                const end = Math.max(start, Math.min(line.endMs, segment.endMs));
-                const left = (start - line.startMs) / lineDuration * 100;
-                const width = (end - start) / lineDuration * 100;
-                return (
-                  <div
-                    key={segment.key}
-                    data-mora-segment={segment.kind === "mora" ? segment.key : undefined}
-                    data-unit-segment={segment.kind === "unit" ? segment.key : undefined}
-                    className={`absolute flex h-10 min-w-px items-center overflow-hidden rounded-[2px] border text-xs font-semibold ${
-                      segment.kind === "unit"
-                        ? "border-border bg-background text-muted-foreground"
-                        : index % 2 === 0
-                          ? "border-primary/45 bg-primary/20 text-foreground"
-                          : "border-border bg-card text-foreground"
-                    }`}
-                    style={{
-                      left: `${left}%`,
-                      top: `${moraSegmentTop}px`,
-                      width: `${width}%`,
-                    }}
-                    title={`${segment.label} ${seconds(start)} - ${seconds(end)}`}
-                  >
-                    <span className="block w-full truncate px-1.5 text-center">
-                      {segment.label}
-                    </span>
-                  </div>
-                );
-              })}
-
-              {boundaryMarkers.map(({ segment, boundaryIndex, leftPercent, lane }) => {
-                  const top = MORA_HANDLE_TOP_PX + lane * MORA_HANDLE_LANE_GAP_PX;
-                  const stemHeight = moraSegmentTop - top - 20;
-                  return (
-                    <button
-                      key={`boundary-${boundaryIndex}`}
-                      type="button"
-                      draggable={false}
-                      data-mora-boundary={boundaryIndex}
-                      data-time-boundary-kind="mora"
-                      data-playback-shortcuts="true"
-                      data-mora-handle-lane={lane}
-                      aria-label={`调整第 ${boundaryIndex + 1} 个 Mora 分界`}
-                      title={`调整 ${segment.label} 后的 Mora 分界`}
-                      className={`focus-ring absolute z-20 flex size-5 -translate-x-1/2 touch-none select-none cursor-ew-resize items-center justify-center rounded-sm border bg-background shadow-sm ${
-                        activeDrag?.kind === "mora-boundary" && activeDrag.boundaryIndex === boundaryIndex
-                          ? "border-primary text-primary"
-                          : "border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground"
-                      }`}
-                      style={{ left: `${leftPercent}%`, top: `${top}px` }}
-                      onPointerDown={(event) => startTimingDrag(event, {
-                        kind: "mora-boundary",
-                        boundaryIndex,
-                        baseTimeMs: segment.endMs,
-                      })}
-                      onFocus={() => setSelectedBoundary({ kind: "mora", boundaryIndex })}
-                      onBlur={() => setSelectedBoundary(null)}
-                      onPointerMove={moveTimingDrag}
-                      onKeyDown={(event) => {
-                        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-                        event.preventDefault();
-                        adjustMoraBoundary(boundaryIndex, segment.endMs, event.key === "ArrowLeft" ? -1 : 1);
-                      }}
-                      onPointerUp={finishTimingDrag}
-                      onPointerCancel={(event) => finishTimingDrag(event, true)}
-                      onLostPointerCapture={(event) => finishTimingDrag(event, true)}
-                    >
-                      {boundaryTooltip({ kind: "mora", boundaryIndex }, segment.endMs)}
-                      <GripVertical className="size-3.5" />
-                      <span
-                        className="pointer-events-none absolute left-1/2 top-full w-px -translate-x-1/2 bg-current opacity-35"
-                        style={{ height: `${stemHeight}px` }}
-                      />
-                    </button>
-                  );
-                })}
+              <button
+                type="button"
+                draggable={false}
+                data-line-move="true"
+                data-playback-shortcuts="true"
+                title="整句平移"
+                aria-label="整句平移"
+                className="focus-ring absolute inset-x-6 top-0 z-10 flex h-8 touch-none select-none cursor-grab items-center justify-center border-b border-primary/35 text-[11px] font-semibold text-primary active:cursor-grabbing"
+                onPointerDown={(event) => startTimingDrag(event, { kind: "line-move" })}
+                onPointerMove={moveTimingDrag}
+                onPointerUp={finishTimingDrag}
+                onPointerCancel={(event) => finishTimingDrag(event, true)}
+                onLostPointerCapture={(event) => finishTimingDrag(event, true)}
+              >
+                <GripVertical className="mr-1 size-3.5" />
+                整句平移
+              </button>
 
               {(["start", "end"] as const).map((edge) => (
                 <button
@@ -537,13 +625,14 @@ export function KirakaraReviewEditor({
                   data-time-boundary-kind={edge === "start" ? "line-start" : "line-end"}
                   data-playback-shortcuts="true"
                   aria-label={`调整当前歌词行的${edge === "start" ? "开始" : "结束"}时间`}
-                  title={edge === "start" ? "调整句首" : "调整句尾"}
-                  className={`focus-ring absolute z-30 flex h-12 w-5 touch-none select-none cursor-ew-resize items-center justify-center text-primary ${
-                    edge === "start" ? "left-0 -translate-x-1/2" : "right-0 translate-x-1/2"
+                  title={edge === "start" ? "整句开始（按比例拉伸）" : "整句结束（按比例拉伸）"}
+                  className={`focus-ring absolute top-0 z-30 flex size-8 touch-none select-none cursor-ew-resize items-center justify-center bg-background/90 text-primary ${
+                    edge === "start"
+                      ? "left-0 border-r border-primary/50"
+                      : "right-0 border-l border-primary/50"
                   }`}
-                  style={{ top: `${moraSegmentTop - 4}px` }}
                   onPointerDown={(event) => startTimingDrag(event, { kind: "line-edge", edge })}
-                  onFocus={() => setSelectedBoundary({ kind: edge === "start" ? "line-start" : "line-end" })}
+                  onFocus={() => selectTimingBoundary({ kind: edge === "start" ? "line-start" : "line-end" })}
                   onBlur={() => setSelectedBoundary(null)}
                   onPointerMove={moveTimingDrag}
                   onKeyDown={(event) => {
@@ -562,6 +651,167 @@ export function KirakaraReviewEditor({
                   <GripVertical className="size-4" />
                 </button>
               ))}
+
+              {timingSegments.map((segment, index) => {
+                const start = Math.max(line.startMs, Math.min(line.endMs, segment.startMs));
+                const end = Math.max(start, Math.min(line.endMs, segment.endMs));
+                const left = (start - line.startMs) / lineDuration * 100;
+                const width = (end - start) / lineDuration * 100;
+                const selected = segment.moraIndex !== null
+                  && selectedMora?.lineIndex === currentLineIndex
+                  && selectedMora.moraIndex === segment.moraIndex;
+                const affected = segment.moraIndex !== null && (
+                  activeDrag?.kind === "mora-boundary"
+                    ? segment.moraIndex === activeDrag.boundaryIndex || segment.moraIndex === activeDrag.boundaryIndex + 1
+                    : activeDrag?.kind === "mora-outer-edge"
+                      ? activeDrag.edge === "start"
+                        ? segment.moraIndex === 0
+                        : segment.moraIndex === moraSegments.length - 1
+                      : false
+                );
+                return (
+                  <button
+                    key={segment.key}
+                    type="button"
+                    data-mora-segment={segment.kind === "mora" ? segment.key : undefined}
+                    data-unit-segment={segment.kind === "unit" ? segment.key : undefined}
+                    aria-pressed={segment.kind === "mora" ? selected : undefined}
+                    className={`focus-ring absolute flex min-w-px items-center overflow-hidden rounded-[2px] border text-xs font-semibold ${
+                      segment.kind === "unit"
+                        ? "border-border bg-background text-muted-foreground"
+                        : selected || affected
+                          ? "z-10 border-primary bg-primary/25 text-primary"
+                          : index % 2 === 0
+                            ? "border-border bg-primary/10 text-foreground hover:bg-primary/20"
+                            : "border-border bg-card text-foreground hover:bg-muted"
+                    }`}
+                    style={{
+                      left: `${left}%`,
+                      top: `${MORA_SEGMENT_TOP_PX}px`,
+                      height: `${MORA_SEGMENT_HEIGHT_PX}px`,
+                      width: `${width}%`,
+                    }}
+                    title={segment.kind === "mora"
+                      ? `选择 Mora：${segment.label}（${seconds(start)} - ${seconds(end)}）`
+                      : `${segment.label} ${seconds(start)} - ${seconds(end)}`}
+                    onClick={() => {
+                      if (segment.moraIndex !== null) {
+                        setSelectedMora({ lineIndex: currentLineIndex, moraIndex: segment.moraIndex });
+                      }
+                    }}
+                  >
+                    <span className="block w-full truncate px-1.5 text-center">
+                      {segment.label}
+                    </span>
+                  </button>
+                );
+              })}
+
+              {boundaryMarkers.map(({ boundaryIndex, leftPercent }) => {
+                  const selectedMoraIndex = selectedMora?.lineIndex === currentLineIndex
+                    ? selectedMora.moraIndex
+                    : null;
+                  const selectedByMora = selectedMoraIndex === boundaryIndex
+                    || selectedMoraIndex === boundaryIndex + 1;
+                  const dragging = activeDrag?.kind === "mora-boundary"
+                    && activeDrag.boundaryIndex === boundaryIndex;
+                  if (!directBoundaryIndexes.has(boundaryIndex) && !selectedByMora && !dragging) return null;
+                  const marker = moraSegments[boundaryIndex];
+                  const selected = selectedBoundary?.lineIndex === currentLineIndex
+                    && selectedBoundary.target.kind === "mora"
+                    && selectedBoundary.target.boundaryIndex === boundaryIndex;
+                  const title = selectedMoraIndex === boundaryIndex + 1
+                    ? "当前 Mora 开始"
+                    : selectedMoraIndex === boundaryIndex
+                      ? "当前 Mora 结束"
+                      : `${marker?.label ?? "Mora"} 后的分界`;
+                  return (
+                    <button
+                      key={`boundary-${boundaryIndex}`}
+                      type="button"
+                      draggable={false}
+                      data-mora-boundary={boundaryIndex}
+                      data-time-boundary-kind="mora"
+                      data-playback-shortcuts="true"
+                      data-density-mode={directBoundaryIndexes.has(boundaryIndex) ? "direct" : "selected"}
+                      aria-label={`调整第 ${boundaryIndex + 1} 个 Mora 分界`}
+                      title={title}
+                      className={`focus-ring group absolute z-20 flex -translate-x-1/2 touch-none select-none cursor-ew-resize items-center justify-center ${
+                        selected || dragging ? "text-primary" : "text-muted-foreground"
+                      }`}
+                      style={{
+                        left: `${leftPercent}%`,
+                        top: `${MORA_SEGMENT_TOP_PX}px`,
+                        width: `${minimumBoundaryGapPx}px`,
+                        height: `${MORA_SEGMENT_HEIGHT_PX}px`,
+                      }}
+                      onPointerDown={(event) => startTimingDrag(event, {
+                        kind: "mora-boundary",
+                        boundaryIndex,
+                        baseTimeMs: marker?.endMs ?? line.startMs,
+                      })}
+                      onFocus={() => selectTimingBoundary({ kind: "mora", boundaryIndex })}
+                      onBlur={() => setSelectedBoundary(null)}
+                      onPointerMove={moveTimingDrag}
+                      onKeyDown={(event) => {
+                        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                        event.preventDefault();
+                        adjustMoraBoundary(boundaryIndex, marker?.endMs ?? line.startMs, event.key === "ArrowLeft" ? -1 : 1);
+                      }}
+                      onPointerUp={finishTimingDrag}
+                      onPointerCancel={(event) => finishTimingDrag(event, true)}
+                      onLostPointerCapture={(event) => finishTimingDrag(event, true)}
+                    >
+                      {boundaryTooltip({ kind: "mora", boundaryIndex }, marker?.endMs ?? line.startMs)}
+                      <span className={`pointer-events-none h-full bg-current transition-[width] ${selected || dragging ? "w-0.5" : "w-px group-hover:w-0.5"}`} />
+                    </button>
+                  );
+                })}
+
+              {selectedMoraSegment && (["start", "end"] as const).map((edge) => {
+                const isOuter = edge === "start"
+                  ? selectedMoraSegment.moraIndex === 0
+                  : selectedMoraSegment.moraIndex === moraSegments.length - 1;
+                if (!isOuter) return null;
+                const timeMs = edge === "start" ? selectedMoraSegment.startMs : selectedMoraSegment.endMs;
+                const leftPercent = (timeMs - line.startMs) / lineDuration * 100;
+                return (
+                  <button
+                    key={`outer-mora-${edge}`}
+                    type="button"
+                    data-mora-outer-edge={edge}
+                    data-time-boundary-kind={`mora-${edge}`}
+                    data-playback-shortcuts="true"
+                    aria-label={`调整当前 Mora 的${edge === "start" ? "开始" : "结束"}时间`}
+                    title={`当前 Mora ${edge === "start" ? "开始" : "结束"}`}
+                    className="focus-ring absolute z-30 flex -translate-x-1/2 touch-none cursor-ew-resize items-center justify-center text-primary"
+                    style={{
+                      left: `${leftPercent}%`,
+                      top: `${MORA_SEGMENT_TOP_PX}px`,
+                      width: `${minimumBoundaryGapPx}px`,
+                      height: `${MORA_SEGMENT_HEIGHT_PX}px`,
+                    }}
+                    onPointerDown={(event) => {
+                      // eslint-disable-next-line react-hooks/refs -- 仅在指针事件触发后读取时间轴元素尺寸。
+                      startTimingDrag(event, { kind: "mora-outer-edge", edge, baseTimeMs: timeMs });
+                    }}
+                    onFocus={() => selectTimingBoundary({ kind: "mora-outer", edge })}
+                    onBlur={() => setSelectedBoundary(null)}
+                    onPointerMove={moveTimingDrag}
+                    onKeyDown={(event) => {
+                      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                      event.preventDefault();
+                      changeMoraEdge(selectedMoraSegment, edge, timeMs + (event.key === "ArrowLeft" ? -stepMs : stepMs));
+                    }}
+                    onPointerUp={finishTimingDrag}
+                    onPointerCancel={(event) => finishTimingDrag(event, true)}
+                    onLostPointerCapture={(event) => finishTimingDrag(event, true)}
+                  >
+                    {boundaryTooltip({ kind: "mora-outer", edge }, timeMs)}
+                    <span className="pointer-events-none h-full w-0.5 bg-current" />
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -573,8 +823,12 @@ export function KirakaraReviewEditor({
                 data-playback-shortcuts="true"
                 min="0"
                 step="0.001"
-                value={seconds(line.startMs)}
-                onChange={(event) => changeRange(Number(event.target.value) * 1000, line.endMs)}
+                value={currentRangeDraft.start}
+                onChange={(event) => setRangeDraft({ ...currentRangeDraft, start: event.target.value })}
+                onBlur={commitRangeDraft}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                }}
                 className="focus-ring mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground"
               />
             </label>
@@ -585,8 +839,12 @@ export function KirakaraReviewEditor({
                 data-playback-shortcuts="true"
                 min="0"
                 step="0.001"
-                value={seconds(line.endMs)}
-                onChange={(event) => changeRange(line.startMs, Number(event.target.value) * 1000)}
+                value={currentRangeDraft.end}
+                onChange={(event) => setRangeDraft({ ...currentRangeDraft, end: event.target.value })}
+                onBlur={commitRangeDraft}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                }}
                 className="focus-ring mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground"
               />
             </label>
@@ -599,6 +857,47 @@ export function KirakaraReviewEditor({
               定位预览
             </button>
           </div>
+
+          {selectedMoraSegment && (
+            <div data-selected-mora-editor="true" className="mt-3 rounded-md border bg-muted/20 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs font-bold">当前 Mora：{selectedMoraSegment.label}</p>
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {seconds(selectedMoraSegment.startMs)} - {seconds(selectedMoraSegment.endMs)}
+                </span>
+              </div>
+              <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                {(["start", "end"] as const).map((edge) => {
+                  const timeMs = edge === "start" ? selectedMoraSegment.startMs : selectedMoraSegment.endMs;
+                  return (
+                    <label key={`${selectedMoraSegment.moraIndex}-${edge}-${timeMs}`} className="text-xs font-medium text-muted-foreground">
+                      Mora {edge === "start" ? "开始" : "结束"}（秒）
+                      <input
+                        type="number"
+                        data-mora-time-input={edge}
+                        data-playback-shortcuts="true"
+                        min="0"
+                        step="0.001"
+                        defaultValue={seconds(timeMs)}
+                        onBlur={(event) => {
+                          const nextTimeMs = Number(event.currentTarget.value) * 1000;
+                          if (!Number.isFinite(nextTimeMs)) {
+                            setError("请输入完整、有效的 Mora 时间点");
+                            return;
+                          }
+                          changeMoraEdge(selectedMoraSegment, edge, nextTimeMs);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") event.currentTarget.blur();
+                        }}
+                        className="focus-ring mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground"
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div data-timing-adjustment-row="true" className="mt-3 flex flex-wrap items-end gap-3">
             <label className="text-xs font-medium text-muted-foreground">微调步长

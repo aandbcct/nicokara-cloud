@@ -265,6 +265,7 @@ export function applyLineOffset(
 }
 
 export type LineEdge = "start" | "end";
+export type OuterMoraEdge = "start" | "end";
 
 const MIN_RESIZED_LINE_DURATION_MS = 100;
 
@@ -303,6 +304,45 @@ export function applyLineEdgeOffset(
     Math.max(minimumEnd, current.endMs + offset),
   );
   return updateLineRange(timeline, lineIndex, current.startMs, nextEnd);
+}
+
+export function updateOuterMoraEdge(
+  timeline: KirakaraTimeline,
+  lineIndex: number,
+  edge: OuterMoraEdge,
+  timeMs: number,
+): KirakaraTimeline {
+  const line = timeline.lines[lineIndex];
+  if (!line) throw new RangeError("歌词行不存在");
+  const references = lineMoraReferences(line);
+  const reference = edge === "start" ? references[0] : references.at(-1);
+  if (!reference) throw new RangeError("当前歌词行没有 Mora");
+
+  const sourceMora = line.units[reference.unitIndex].moras[reference.moraIndex];
+  const requested = Number.isFinite(timeMs)
+    ? Math.round(timeMs)
+    : edge === "start" ? sourceMora.startMs : sourceMora.endMs;
+  const nextTime = edge === "start"
+    ? Math.min(sourceMora.endMs - 1, Math.max(line.startMs, requested))
+    : Math.max(sourceMora.startMs + 1, Math.min(line.endMs, requested));
+  const lines = timeline.lines.map((candidate, candidateIndex): KirakaraLine => {
+    if (candidateIndex !== lineIndex) return candidate;
+    return {
+      ...candidate,
+      units: candidate.units.map((unit, unitIndex) => unitIndex !== reference.unitIndex
+        ? unit
+        : {
+            ...unit,
+            moras: unit.moras.map((mora, moraIndex) => moraIndex !== reference.moraIndex
+              ? mora
+              : {
+                  ...mora,
+                  ...(edge === "start" ? { startMs: nextTime } : { endMs: nextTime }),
+                }),
+          }),
+    };
+  });
+  return { ...timeline, lines };
 }
 
 const MIN_MORA_DURATION_MS = 10;

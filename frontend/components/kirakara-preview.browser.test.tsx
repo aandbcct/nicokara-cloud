@@ -201,12 +201,26 @@ describe("KirakaraPreview browser behavior", () => {
     const secondLine = screen.getByRole("button", { name: "2. 明日" });
     expect(navigator).toBeTruthy();
     if (!navigator) return;
-    Object.defineProperty(navigator, "clientHeight", { configurable: true, value: 40 });
-    Object.defineProperty(secondLine, "offsetTop", { configurable: true, value: 80 });
-    Object.defineProperty(secondLine, "offsetHeight", { configurable: true, value: 20 });
+    navigator.scrollTop = 10;
+    navigator.getBoundingClientRect = vi.fn(() => ({ top: 100, bottom: 200 }) as DOMRect);
+    secondLine.getBoundingClientRect = vi.fn(() => ({ top: 220, bottom: 240 }) as DOMRect);
     video.currentTime = 3.1;
     fireEvent.timeUpdate(video);
-    await waitFor(() => expect(navigator.scrollTop).toBe(60));
+    await waitFor(() => expect(navigator.scrollTop).toBe(50));
+  });
+
+  it("REQ-SCROLL-02 keeps a clicked visible lyric at the current scroll position", async () => {
+    const { container } = await renderWorkbench("visible-lyric-keeps-scroll");
+    const navigator = container.querySelector<HTMLElement>('[data-lyric-navigator="true"]');
+    const secondLine = screen.getByRole("button", { name: "2. 明日" });
+    expect(navigator).toBeTruthy();
+    if (!navigator) return;
+    navigator.scrollTop = 300;
+    navigator.getBoundingClientRect = vi.fn(() => ({ top: 100, bottom: 300 }) as DOMRect);
+    secondLine.getBoundingClientRect = vi.fn(() => ({ top: 140, bottom: 180 }) as DOMRect);
+    fireEvent.click(secondLine);
+    await waitFor(() => expect(secondLine.getAttribute("data-editing-line")).toBe("true"));
+    expect(navigator.scrollTop).toBe(300);
   });
 
   it("REQ-SCROLL-01 does not scroll the page when playback advances", async () => {
@@ -366,6 +380,7 @@ describe("KirakaraPreview browser behavior", () => {
     const { video } = await renderWorkbench("boundary-space-playback");
     installVideoBehavior(video);
     fireEvent.click(screen.getByRole("button", { name: "1. 今日" }));
+    fireEvent.click(screen.getByRole("button", { name: "きょ" }));
     const boundary = screen.getByRole("button", { name: "调整第 1 个 Mora 分界" });
     boundary.focus();
     fireEvent.keyDown(boundary, { key: " " });
@@ -376,6 +391,7 @@ describe("KirakaraPreview browser behavior", () => {
     const { video } = await renderWorkbench("boundary-rate-shortcut");
     installVideoBehavior(video);
     fireEvent.click(screen.getByRole("button", { name: "1. 今日" }));
+    fireEvent.click(screen.getByRole("button", { name: "きょ" }));
     const boundary = screen.getByRole("button", { name: "调整第 1 个 Mora 分界" });
     boundary.focus();
     fireEvent.keyDown(boundary, { key: "x" });
