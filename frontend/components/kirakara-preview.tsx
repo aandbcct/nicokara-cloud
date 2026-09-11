@@ -87,7 +87,7 @@ function KirakaraLyricNavigator({
   }, [playbackLineIndex]);
 
   return (
-    <div data-lyric-navigator="true" className="max-h-[min(32rem,55vh)] overflow-y-auto rounded-md border">
+    <div data-lyric-navigator="true" className="rounded-md border">
       {timeline.lines.map((line, index) => {
         const playing = playbackLineIndex === index;
         const editing = editingLineIndex === index;
@@ -911,7 +911,10 @@ export function KirakaraPreview({
                     字幕样式
                   </button>
                 </div>
-                <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                <div
+                  data-kirakara-tab-scroll-area="true"
+                  className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                >
                   {sideTab === WorkbenchSideTab.Lyrics ? (
                     <KirakaraLyricNavigator
                       timeline={timeline}

@@ -161,7 +161,16 @@ describe("KirakaraPreview browser behavior", () => {
 
   it("REQ-LIST-01 renders a persistent scrollable lyric list", async () => {
     const { container } = await renderWorkbench("scrollable-lyrics");
-    expect(container.querySelector('[data-lyric-navigator="true"]')?.className).toContain("overflow-y-auto");
+    expect(container.querySelector('[data-kirakara-tab-scroll-area="true"]')?.className).toContain("overflow-y-auto");
+  });
+
+  it("REQ-LIST-05 hides both lyric scrollbar tracks", async () => {
+    const { container } = await renderWorkbench("hidden-lyric-scrollbars");
+    const navigator = container.querySelector('[data-lyric-navigator="true"]');
+    const scrollArea = container.querySelector('[data-kirakara-tab-scroll-area="true"]');
+    expect(navigator?.className).not.toContain("overflow-y-auto");
+    expect(scrollArea?.className).toContain("[scrollbar-width:none]");
+    expect(scrollArea?.className).toContain("[&::-webkit-scrollbar]:hidden");
   });
 
   it("REQ-LIST-02 places the lyric tabs after the timeline for vertical layouts", async () => {
