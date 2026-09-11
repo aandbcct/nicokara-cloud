@@ -1,12 +1,27 @@
 export type KirakaraStyle = {
   fontFamily: string;
   fontSize: number;
+  fontBold: boolean;
+  letterSpacing: number;
   rubySize: number;
+  rubyLetterSpacing: number;
+  rubyOffset: number;
   colorBefore: string;
   colorAfter: string;
+  strokeColorBefore: string;
+  strokeColorAfter: string;
   strokeWidth: number;
+  shadowColor: string;
+  shadowDepth: number;
+  horizontalMargin: number;
   upperY: number;
   lowerY: number;
+};
+
+export type KirakaraStylePreset = {
+  id: string;
+  label: string;
+  style: KirakaraStyle;
 };
 
 export const KIRAKARA_STYLE_STORAGE_KEY = "nicokara-kirakara-style-v1";
@@ -14,13 +29,53 @@ export const KIRAKARA_STYLE_STORAGE_KEY = "nicokara-kirakara-style-v1";
 export const DEFAULT_KIRAKARA_STYLE: KirakaraStyle = Object.freeze({
   fontFamily: '"Noto Sans JP", "Yu Gothic", sans-serif',
   fontSize: 64,
+  fontBold: true,
+  letterSpacing: 9,
   rubySize: 26,
+  rubyLetterSpacing: 5,
+  rubyOffset: 4,
   colorBefore: "#ffffff",
   colorAfter: "#a50000",
+  strokeColorBefore: "#000000",
+  strokeColorAfter: "#ffffff",
   strokeWidth: 5,
+  shadowColor: "#000000",
+  shadowDepth: 0,
+  horizontalMargin: 128,
   upperY: 430,
   lowerY: 563,
 });
+
+export const KIRAKARA_STYLE_PRESETS: readonly KirakaraStylePreset[] = Object.freeze([
+  { id: "classic", label: "经典卡拉 OK", style: DEFAULT_KIRAKARA_STYLE },
+  {
+    id: "compact",
+    label: "紧凑小字",
+    style: Object.freeze({
+      ...DEFAULT_KIRAKARA_STYLE,
+      fontSize: 44,
+      rubySize: 18,
+      letterSpacing: 5,
+      rubyLetterSpacing: 3,
+      strokeWidth: 3,
+      horizontalMargin: 88,
+    }),
+  },
+  {
+    id: "soft-shadow",
+    label: "柔和阴影",
+    style: Object.freeze({
+      ...DEFAULT_KIRAKARA_STYLE,
+      fontSize: 56,
+      rubySize: 22,
+      letterSpacing: 6,
+      rubyLetterSpacing: 4,
+      strokeWidth: 3,
+      shadowDepth: 4,
+      horizontalMargin: 104,
+    }),
+  },
+]);
 
 const COLOR = /^#[0-9a-f]{6}$/i;
 const UNSAFE_FONT_FAMILY = /[\u0000-\u001f\u007f<>;{}]/u;
@@ -49,19 +104,32 @@ function color(value: unknown, fallback: string): string {
   return typeof value === "string" && COLOR.test(value) ? value.toLowerCase() : fallback;
 }
 
+function boolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 export function normalizeKirakaraStyle(
   value: Partial<KirakaraStyle> | null | undefined,
 ): KirakaraStyle {
   const source = value ?? {};
   return {
     fontFamily: fontFamily(source.fontFamily),
-    fontSize: numberInRange(source.fontSize, DEFAULT_KIRAKARA_STYLE.fontSize, 48, 80),
-    rubySize: numberInRange(source.rubySize, DEFAULT_KIRAKARA_STYLE.rubySize, 18, 38),
+    fontSize: numberInRange(source.fontSize, DEFAULT_KIRAKARA_STYLE.fontSize, 24, 120),
+    fontBold: boolean(source.fontBold, DEFAULT_KIRAKARA_STYLE.fontBold),
+    letterSpacing: numberInRange(source.letterSpacing, DEFAULT_KIRAKARA_STYLE.letterSpacing, -4, 32),
+    rubySize: numberInRange(source.rubySize, DEFAULT_KIRAKARA_STYLE.rubySize, 10, 60),
+    rubyLetterSpacing: numberInRange(source.rubyLetterSpacing, DEFAULT_KIRAKARA_STYLE.rubyLetterSpacing, -2, 20),
+    rubyOffset: numberInRange(source.rubyOffset, DEFAULT_KIRAKARA_STYLE.rubyOffset, 0, 32),
     colorBefore: color(source.colorBefore, DEFAULT_KIRAKARA_STYLE.colorBefore),
     colorAfter: color(source.colorAfter, DEFAULT_KIRAKARA_STYLE.colorAfter),
-    strokeWidth: numberInRange(source.strokeWidth, DEFAULT_KIRAKARA_STYLE.strokeWidth, 2, 8),
-    upperY: numberInRange(source.upperY, DEFAULT_KIRAKARA_STYLE.upperY, 320, 560),
-    lowerY: numberInRange(source.lowerY, DEFAULT_KIRAKARA_STYLE.lowerY, 440, 680),
+    strokeColorBefore: color(source.strokeColorBefore, DEFAULT_KIRAKARA_STYLE.strokeColorBefore),
+    strokeColorAfter: color(source.strokeColorAfter, DEFAULT_KIRAKARA_STYLE.strokeColorAfter),
+    strokeWidth: numberInRange(source.strokeWidth, DEFAULT_KIRAKARA_STYLE.strokeWidth, 0, 12),
+    shadowColor: color(source.shadowColor, DEFAULT_KIRAKARA_STYLE.shadowColor),
+    shadowDepth: numberInRange(source.shadowDepth, DEFAULT_KIRAKARA_STYLE.shadowDepth, 0, 12),
+    horizontalMargin: numberInRange(source.horizontalMargin, DEFAULT_KIRAKARA_STYLE.horizontalMargin, 0, 320),
+    upperY: numberInRange(source.upperY, DEFAULT_KIRAKARA_STYLE.upperY, 120, 600),
+    lowerY: numberInRange(source.lowerY, DEFAULT_KIRAKARA_STYLE.lowerY, 240, 700),
   };
 }
 
@@ -91,10 +159,19 @@ export function kirakaraStylePayload(style: KirakaraStyle) {
   return {
     font_family: firstFontFamily.replace(/^(['"])(.*)\1$/u, "$2"),
     font_size: normalized.fontSize,
+    font_bold: normalized.fontBold,
+    letter_spacing: normalized.letterSpacing,
     ruby_size: normalized.rubySize,
+    ruby_letter_spacing: normalized.rubyLetterSpacing,
+    ruby_offset: normalized.rubyOffset,
     color_before: normalized.colorBefore,
     color_after: normalized.colorAfter,
+    stroke_color_before: normalized.strokeColorBefore,
+    stroke_color_after: normalized.strokeColorAfter,
     stroke_width: normalized.strokeWidth,
+    shadow_color: normalized.shadowColor,
+    shadow_depth: normalized.shadowDepth,
+    horizontal_margin: normalized.horizontalMargin,
     upper_y: normalized.upperY,
     lower_y: normalized.lowerY,
   };

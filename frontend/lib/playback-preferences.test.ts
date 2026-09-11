@@ -58,4 +58,21 @@ describe("playback preview lead preferences", () => {
     preferences.savePlaybackShortcutBindings(storage, editing);
     expect(preferences.loadPlaybackShortcutBindings(storage)["rate-up"]).toBe("v");
   });
+
+  it("REQ-MORA-SHORTCUT-03 keeps bracket defaults when loading old bindings", () => {
+    const oldBindings = {
+      "previous-line": "u",
+      "next-line": "i",
+      "replay-line": "o",
+      "toggle-line-loop": "p",
+      "rate-toggle": "z",
+      "rate-down": "x",
+      "rate-up": "c",
+    };
+    const loaded = preferences.loadPlaybackShortcutBindings({
+      getItem: () => JSON.stringify(oldBindings),
+    });
+    expect(loaded["previous-mora"]).toBe("[");
+    expect(loaded["next-mora"]).toBe("]");
+  });
 });

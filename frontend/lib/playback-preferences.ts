@@ -47,6 +47,8 @@ const CONFIGURABLE_SHORTCUTS = [
   PlaybackShortcut.NextLine,
   PlaybackShortcut.ReplayLine,
   PlaybackShortcut.ToggleLineLoop,
+  PlaybackShortcut.PreviousMora,
+  PlaybackShortcut.NextMora,
   PlaybackShortcut.RateToggle,
   PlaybackShortcut.RateDown,
   PlaybackShortcut.RateUp,
@@ -54,7 +56,7 @@ const CONFIGURABLE_SHORTCUTS = [
 
 export function normalizePlaybackShortcutKey(value: string): string | null {
   const normalized = value.trim().toLowerCase();
-  return /^[a-z0-9]$/.test(normalized) ? normalized : null;
+  return /^[a-z0-9\[\]]$/.test(normalized) ? normalized : null;
 }
 
 function parsedShortcutBindings(value: unknown): PlaybackShortcutBindings | null {
@@ -63,7 +65,7 @@ function parsedShortcutBindings(value: unknown): PlaybackShortcutBindings | null
   const bindings = { ...DEFAULT_PLAYBACK_SHORTCUT_BINDINGS };
   const usedKeys = new Set<string>();
   for (const shortcut of CONFIGURABLE_SHORTCUTS) {
-    const stored = record[shortcut];
+    const stored = record[shortcut] ?? DEFAULT_PLAYBACK_SHORTCUT_BINDINGS[shortcut];
     if (typeof stored !== "string") return null;
     const key = normalizePlaybackShortcutKey(stored);
     if (key === null || usedKeys.has(key)) return null;

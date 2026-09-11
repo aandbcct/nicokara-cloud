@@ -31,7 +31,15 @@ import type {
   KirakaraLine,
   KirakaraTimeline,
 } from "@/lib/kirakara-timeline";
-import { formatPlaybackSeconds, previewSeekMs, type PlaybackRange } from "@/lib/timeline-editing";
+import {
+  DEFAULT_PLAYBACK_SHORTCUT_BINDINGS,
+  formatPlaybackSeconds,
+  playbackShortcut,
+  PlaybackShortcut,
+  previewSeekMs,
+  type PlaybackRange,
+  type PlaybackShortcutBindings,
+} from "@/lib/timeline-editing";
 
 type TimingDragTarget =
   | { kind: "line-edge"; edge: "start" | "end" }
@@ -74,6 +82,8 @@ type MoraBoundaryMarker = {
 
 const MOUSE_BOUNDARY_GAP_PX = 20;
 const TOUCH_BOUNDARY_GAP_PX = 32;
+const MOUSE_BOUNDARY_HIT_WIDTH_PX = 12;
+const TOUCH_BOUNDARY_HIT_WIDTH_PX = 24;
 const MORA_SEGMENT_TOP_PX = 18;
 const MORA_SEGMENT_HEIGHT_PX = 48;
 const MORA_TRACK_HEIGHT_PX = 74;
@@ -227,6 +237,7 @@ export function KirakaraReviewEditor({
   timeline,
   editingLineIndex,
   previewLeadMs,
+  shortcutBindings = DEFAULT_PLAYBACK_SHORTCUT_BINDINGS,
   onEditingLineChange,
   onChange,
   onSeek,
@@ -235,6 +246,7 @@ export function KirakaraReviewEditor({
   timeline: KirakaraTimeline;
   editingLineIndex: number | null;
   previewLeadMs: number;
+  shortcutBindings?: PlaybackShortcutBindings;
   onEditingLineChange: (index: number) => void;
   onChange: (timeline: KirakaraTimeline, group?: string) => void;
   onSeek: (milliseconds: number) => void;
@@ -266,6 +278,9 @@ export function KirakaraReviewEditor({
       ? TOUCH_BOUNDARY_GAP_PX
       : MOUSE_BOUNDARY_GAP_PX,
   );
+  const boundaryHitWidthPx = minimumBoundaryGapPx === TOUCH_BOUNDARY_GAP_PX
+    ? TOUCH_BOUNDARY_HIT_WIDTH_PX
+    : MOUSE_BOUNDARY_HIT_WIDTH_PX;
   const [rangeDraft, setRangeDraft] = useState<{
     lineIndex: number;
     sourceStartMs: number;
@@ -329,6 +344,27 @@ export function KirakaraReviewEditor({
   const selectedMoraSegment = selectedMora?.lineIndex === currentLineIndex
     ? moraSegments.find((segment) => segment.moraIndex === selectedMora.moraIndex) ?? null
     : null;
+
+  useEffect(() => {
+    function handleMoraShortcut(event: KeyboardEvent) {
+      const shortcut = playbackShortcut(event, event.target, shortcutBindings);
+      if (shortcut !== PlaybackShortcut.PreviousMora
+        && shortcut !== PlaybackShortcut.NextMora) return;
+      if (moraSegments.length === 0) return;
+      event.preventDefault();
+      const current = selectedMora?.lineIndex === currentLineIndex
+        ? selectedMora.moraIndex
+        : shortcut === PlaybackShortcut.NextMora ? -1 : moraSegments.length;
+      const direction = shortcut === PlaybackShortcut.NextMora ? 1 : -1;
+      const moraIndex = Math.min(
+        moraSegments.length - 1,
+        Math.max(0, current + direction),
+      );
+      setSelectedMora({ lineIndex: currentLineIndex, moraIndex });
+    }
+    window.addEventListener("keydown", handleMoraShortcut, true);
+    return () => window.removeEventListener("keydown", handleMoraShortcut, true);
+  }, [currentLineIndex, moraSegments, selectedMora, shortcutBindings]);
   const currentRangeDraft = rangeDraft?.lineIndex === currentLineIndex
     && rangeDraft.sourceStartMs === lineStartMs
     && rangeDraft.sourceEndMs === lineEndMs
@@ -341,12 +377,15 @@ export function KirakaraReviewEditor({
         end: lineEndMs === undefined ? "" : seconds(lineEndMs),
       };
 
-  function changeRange(startMs: number, endMs: number) {
+  function changeRange(startMs: number, endMs: number): KirakaraTimeline | null {
     try {
-      onChange(updateLineRange(timeline, currentLineIndex, startMs, endMs));
+      const updated = updateLineRange(timeline, currentLineIndex, startMs, endMs);
+      onChange(updated);
       setError(null);
+      return updated;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "时间范围无效");
+      return null;
     }
   }
 
@@ -357,7 +396,21 @@ export function KirakaraReviewEditor({
       setError("请输入完整、有效的时间点");
       return;
     }
-    changeRange(startMs, endMs);
+    const previous = timeline.lines[currentLineIndex - 1];
+    const next = timeline.lines[currentLineIndex + 1];
+    const constrainedStart = Math.max(previous?.endMs ?? 0, Math.round(startMs));
+    const constrainedEnd = Math.min(next?.startMs ?? Number.POSITIVE_INFINITY, Math.round(endMs));
+    const updated = changeRange(constrainedStart, constrainedEnd);
+    const updatedLine = updated?.lines[currentLineIndex];
+    if (updatedLine) {
+      setRangeDraft({
+        ...currentRangeDraft,
+        start: seconds(updatedLine.startMs),
+        end: seconds(updatedLine.endMs),
+      });
+    } else {
+      setRangeDraft(null);
+    }
   }
 
   function applyOffset() {
@@ -641,7 +694,7 @@ export function KirakaraReviewEditor({
                   data-playback-shortcuts="true"
                   aria-label={`调整当前歌词行的${edge === "start" ? "开始" : "结束"}时间`}
                   title={edge === "start" ? "整句开始（按比例拉伸）" : "整句结束（按比例拉伸）"}
-                  className={`focus-ring absolute top-0 z-30 flex h-6 w-5 -translate-y-1/2 touch-none select-none cursor-ew-resize items-center justify-center text-primary ${
+                  className={`focus-ring absolute top-0 z-30 flex h-6 w-4 -translate-y-1/2 touch-none select-none cursor-ew-resize items-center justify-center text-primary ${
                     edge === "start"
                       ? "left-0 -translate-x-1/2"
                       : "right-0 translate-x-1/2"
@@ -757,7 +810,7 @@ export function KirakaraReviewEditor({
                       style={{
                         left: `${leftPercent}%`,
                         top: `${MORA_SEGMENT_TOP_PX}px`,
-                        width: `${minimumBoundaryGapPx}px`,
+                        width: `${boundaryHitWidthPx}px`,
                         height: `${MORA_SEGMENT_HEIGHT_PX}px`,
                       }}
                       onPointerDown={(event) => startTimingDrag(event, {
@@ -803,7 +856,7 @@ export function KirakaraReviewEditor({
                     style={{
                       left: `${leftPercent}%`,
                       top: `${MORA_SEGMENT_TOP_PX}px`,
-                      width: `${minimumBoundaryGapPx}px`,
+                      width: `${boundaryHitWidthPx}px`,
                       height: `${MORA_SEGMENT_HEIGHT_PX}px`,
                     }}
                     onPointerDown={(event) => {
@@ -836,7 +889,9 @@ export function KirakaraReviewEditor({
               <input
                 type="number"
                 data-playback-shortcuts="true"
-                min="0"
+                min={timeline.lines[currentLineIndex - 1]
+                  ? seconds(timeline.lines[currentLineIndex - 1].endMs)
+                  : "0"}
                 step="0.001"
                 value={currentRangeDraft.start}
                 onChange={(event) => setRangeDraft({ ...currentRangeDraft, start: event.target.value })}
@@ -853,6 +908,9 @@ export function KirakaraReviewEditor({
                 type="number"
                 data-playback-shortcuts="true"
                 min="0"
+                max={timeline.lines[currentLineIndex + 1]
+                  ? seconds(timeline.lines[currentLineIndex + 1].startMs)
+                  : undefined}
                 step="0.001"
                 value={currentRangeDraft.end}
                 onChange={(event) => setRangeDraft({ ...currentRangeDraft, end: event.target.value })}

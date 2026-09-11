@@ -4,6 +4,7 @@ import { ChevronDown, RotateCcw } from "lucide-react";
 
 import {
   DEFAULT_KIRAKARA_STYLE,
+  KIRAKARA_STYLE_PRESETS,
   normalizeKirakaraStyle,
   type KirakaraStyle,
 } from "@/lib/kirakara-style";
@@ -62,6 +63,10 @@ export function KirakaraStyleEditor({
     onChange(normalizeKirakaraStyle({ ...style, ...patch }));
   }
 
+  const selectedPreset = KIRAKARA_STYLE_PRESETS.find(
+    (preset) => JSON.stringify(preset.style) === JSON.stringify(style),
+  )?.id ?? "custom";
+
   return (
     <section
       aria-labelledby="kirakara-style-heading"
@@ -81,6 +86,25 @@ export function KirakaraStyleEditor({
       </div>
 
       <div className="mt-3 grid min-w-0 gap-4">
+        <label className="grid min-w-0 gap-2 text-sm font-medium">
+          样式预设
+          <select
+            aria-label="样式预设"
+            value={selectedPreset}
+            onChange={(event) => {
+              const preset = KIRAKARA_STYLE_PRESETS.find(
+                (candidate) => candidate.id === event.target.value,
+              );
+              if (preset) onChange(preset.style);
+            }}
+            className="focus-ring h-10 min-w-0 rounded-md border bg-background px-3"
+          >
+            <option value="custom" disabled>自定义</option>
+            {KIRAKARA_STYLE_PRESETS.map((preset) => (
+              <option key={preset.id} value={preset.id}>{preset.label}</option>
+            ))}
+          </select>
+        </label>
         <label
           className="grid min-w-0 gap-2 text-sm font-medium"
           data-kirakara-font-control="kirakara"
@@ -119,24 +143,81 @@ export function KirakaraStyleEditor({
             </span>
           </span>
         </label>
-        <div className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3">
-          <RangeField label="描边" value={style.strokeWidth} min={2} max={8} onChange={(strokeWidth) => update({ strokeWidth })} />
-          <RangeField label="主字大小" value={style.fontSize} min={48} max={80} onChange={(fontSize) => update({ fontSize })} />
-          <RangeField label="注音大小" value={style.rubySize} min={18} max={38} onChange={(rubySize) => update({ rubySize })} />
-          <RangeField label="上行位置" value={style.upperY} min={320} max={560} onChange={(upperY) => update({ upperY })} />
-          <RangeField label="下行位置" value={style.lowerY} min={440} max={680} onChange={(lowerY) => update({ lowerY })} />
-        </div>
-        <div className="grid min-w-0 grid-cols-2 gap-3">
-          <label className="grid min-w-0 gap-1 whitespace-nowrap text-xs font-medium">
-            未唱颜色
-            <input type="color" value={style.colorBefore} onChange={(event) => update({ colorBefore: event.target.value })} className="h-9 w-full cursor-pointer rounded-md border bg-background p-1" />
+        <fieldset className="grid min-w-0 gap-3 rounded-lg border p-3">
+          <legend className="px-1 text-xs font-semibold text-muted-foreground">主字</legend>
+          <label className="grid min-w-0 gap-2 text-sm font-medium">
+            字体粗细
+            <select
+              aria-label="字体粗细"
+              value={style.fontBold ? "bold" : "normal"}
+              onChange={(event) => update({ fontBold: event.target.value === "bold" })}
+              className="focus-ring h-9 min-w-0 rounded-md border bg-background px-3"
+            >
+              <option value="normal">常规</option>
+              <option value="bold">粗体</option>
+            </select>
           </label>
-          <label className="grid min-w-0 gap-1 whitespace-nowrap text-xs font-medium">
-            已唱颜色
-            <input type="color" value={style.colorAfter} onChange={(event) => update({ colorAfter: event.target.value })} className="h-9 w-full cursor-pointer rounded-md border bg-background p-1" />
-          </label>
-        </div>
+          <div className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3">
+            <RangeField label="主字大小" value={style.fontSize} min={24} max={120} onChange={(fontSize) => update({ fontSize })} />
+            <RangeField label="主字字间距" value={style.letterSpacing} min={-4} max={32} onChange={(letterSpacing) => update({ letterSpacing })} />
+          </div>
+        </fieldset>
+
+        <fieldset className="grid min-w-0 gap-3 rounded-lg border p-3">
+          <legend className="px-1 text-xs font-semibold text-muted-foreground">注音</legend>
+          <div className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3">
+            <RangeField label="注音大小" value={style.rubySize} min={10} max={60} onChange={(rubySize) => update({ rubySize })} />
+            <RangeField label="注音字间距" value={style.rubyLetterSpacing} min={-2} max={20} onChange={(rubyLetterSpacing) => update({ rubyLetterSpacing })} />
+            <RangeField label="注音偏移" value={style.rubyOffset} min={0} max={32} onChange={(rubyOffset) => update({ rubyOffset })} />
+          </div>
+        </fieldset>
+
+        <fieldset className="grid min-w-0 gap-3 rounded-lg border p-3">
+          <legend className="px-1 text-xs font-semibold text-muted-foreground">颜色与效果</legend>
+          <div className="grid min-w-0 grid-cols-2 gap-3">
+            <ColorField label="未唱" value={style.colorBefore} onChange={(colorBefore) => update({ colorBefore })} />
+            <ColorField label="已唱" value={style.colorAfter} onChange={(colorAfter) => update({ colorAfter })} />
+            <ColorField label="未唱描边" value={style.strokeColorBefore} onChange={(strokeColorBefore) => update({ strokeColorBefore })} />
+            <ColorField label="已唱描边" value={style.strokeColorAfter} onChange={(strokeColorAfter) => update({ strokeColorAfter })} />
+          </div>
+          <div className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3">
+            <RangeField label="描边粗细" value={style.strokeWidth} min={0} max={12} onChange={(strokeWidth) => update({ strokeWidth })} />
+            <RangeField label="阴影深度" value={style.shadowDepth} min={0} max={12} onChange={(shadowDepth) => update({ shadowDepth })} />
+          </div>
+          <ColorField label="阴影颜色" value={style.shadowColor} onChange={(shadowColor) => update({ shadowColor })} />
+        </fieldset>
+
+        <fieldset className="grid min-w-0 gap-3 rounded-lg border p-3">
+          <legend className="px-1 text-xs font-semibold text-muted-foreground">画面布局</legend>
+          <div className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3">
+            <RangeField label="横向安全边距" value={style.horizontalMargin} min={0} max={320} onChange={(horizontalMargin) => update({ horizontalMargin })} />
+            <RangeField label="上行位置" value={style.upperY} min={120} max={600} onChange={(upperY) => update({ upperY })} />
+            <RangeField label="下行位置" value={style.lowerY} min={240} max={700} onChange={(lowerY) => update({ lowerY })} />
+          </div>
+        </fieldset>
       </div>
     </section>
+  );
+}
+
+function ColorField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="grid min-w-0 gap-1 whitespace-nowrap text-xs font-medium">
+      {label}
+      <input
+        type="color"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-9 w-full cursor-pointer rounded-md border bg-background p-1"
+      />
+    </label>
   );
 }

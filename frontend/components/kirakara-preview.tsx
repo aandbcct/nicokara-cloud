@@ -78,6 +78,11 @@ const QUICK_LINE_SHORTCUT_SETTINGS = [
   { shortcut: PlaybackShortcut.ToggleLineLoop, label: "本句循环" },
 ] as const;
 
+const MORA_SHORTCUT_SETTINGS = [
+  { shortcut: PlaybackShortcut.PreviousMora, label: "上一个 Mora" },
+  { shortcut: PlaybackShortcut.NextMora, label: "下一个 Mora" },
+] as const;
+
 const PLAYBACK_RATE_SHORTCUT_SETTINGS = [
   { shortcut: PlaybackShortcut.RateToggle, label: "切换常速" },
   { shortcut: PlaybackShortcut.RateDown, label: "降低倍速" },
@@ -611,6 +616,8 @@ export function KirakaraPreview({
         if (currentIndex === null || !timeline?.lines[currentIndex]) return;
         setEditingLineIndex(currentIndex);
         setLooping((current) => !current);
+      } else if (shortcut === PlaybackShortcut.PreviousMora || shortcut === PlaybackShortcut.NextMora) {
+        return;
       } else if (shortcut !== PlaybackShortcut.PlayToggle) {
         changePlaybackRate(playbackRateAfterShortcut(shortcut, playbackRate, lastNonDefaultRate));
       } else {
@@ -655,12 +662,8 @@ export function KirakaraPreview({
     if (!range || !element) return;
     if (Number.isFinite(element.duration) && range.startMs >= element.duration * 1000) {
       setPlaybackError("当前句超出视频时长");
-      return;
     }
-    programmaticSeekLineRef.current = editingLineIndex;
-    element.currentTime = range.startMs / 1000;
-    updateFrame();
-  }, [editingLineIndex, updateFrame]);
+  }, []);
 
   function retryTimelineSave() {
     if (!timeline) return;
@@ -712,7 +715,7 @@ export function KirakaraPreview({
   function updateShortcut(shortcut: keyof PlaybackShortcutBindings, value: string) {
     const key = normalizePlaybackShortcutKey(value);
     if (key === null) {
-      setShortcutError("快捷键仅支持单个英文字母或数字");
+      setShortcutError("快捷键仅支持单个英文字母、数字或方括号");
       return;
     }
     const duplicate = Object.entries(shortcutBindings).find(
@@ -920,6 +923,7 @@ export function KirakaraPreview({
                   timeline={timeline}
                   editingLineIndex={editingLineIndex}
                   previewLeadMs={previewLeadMs}
+                  shortcutBindings={shortcutBindings}
                   onEditingLineChange={selectEditingLine}
                   onChange={updateTimeline}
                   onSeek={seekPreview}
@@ -959,6 +963,7 @@ export function KirakaraPreview({
                     <div className="grid gap-4 border-t pt-3 sm:grid-cols-2">
                       {[
                         { title: "快速定位", settings: QUICK_LINE_SHORTCUT_SETTINGS },
+                        { title: "Mora 选择", settings: MORA_SHORTCUT_SETTINGS },
                         { title: "播放倍速", settings: PLAYBACK_RATE_SHORTCUT_SETTINGS },
                       ].map((group) => (
                         <fieldset key={group.title} className="min-w-0">
@@ -985,7 +990,7 @@ export function KirakaraPreview({
                       ))}
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-xs leading-5 text-muted-foreground">点击快捷键输入框，再按一个字母或数字即可替换。</p>
+                      <p className="text-xs leading-5 text-muted-foreground">点击快捷键输入框，再按一个字母、数字或方括号即可替换。</p>
                       <button
                         type="button"
                         onClick={resetShortcuts}

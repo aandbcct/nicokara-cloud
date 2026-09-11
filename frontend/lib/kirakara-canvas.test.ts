@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { drawKirakaraFrame } from "./kirakara-canvas";
+import { DEFAULT_KIRAKARA_STYLE } from "./kirakara-style";
 import type { KirakaraFrame } from "./kirakara-timeline";
 
 function context(
@@ -43,6 +44,10 @@ function context(
     textBaseline: "alphabetic" as CanvasTextBaseline,
     lineJoin: "miter" as CanvasLineJoin,
     miterLimit: 10,
+    shadowColor: "transparent",
+    shadowBlur: 0,
+    shadowOffsetX: 0,
+    shadowOffsetY: 0,
     strokeStates,
   };
   return canvasContext;
@@ -245,5 +250,33 @@ describe("drawKirakaraFrame", () => {
     expect(canvas.fillText).toHaveBeenCalledWith("火", 143, expect.any(Number));
     expect(canvas.fillText).toHaveBeenCalledWith("ほ", 128, expect.any(Number));
     expect(canvas.fillText).toHaveBeenCalledWith("山", 207, expect.any(Number));
+  });
+
+  it("REQ-STYLE-CANVAS-01 applies custom weight, margin, outline, and shadow", () => {
+    const canvas = context();
+
+    drawKirakaraFrame(canvas, {
+      lines: [{
+        slot: "upper",
+        text: "歌",
+        units: [{ text: "歌", progress: 0, ruby: [] }],
+      }],
+    }, {
+      style: {
+        ...DEFAULT_KIRAKARA_STYLE,
+        fontBold: false,
+        horizontalMargin: 80,
+        strokeColorBefore: "#123456",
+        strokeColorAfter: "#abcdef",
+        shadowColor: "#654321",
+        shadowDepth: 4,
+      },
+    });
+
+    expect(canvas.fillText).toHaveBeenCalledWith("歌", 80, expect.any(Number));
+    expect(canvas.font).toContain("normal 64px");
+    expect(canvas.shadowColor).toBe("#654321");
+    expect(canvas.shadowOffsetX).toBe(4);
+    expect(canvas.strokeStyle).toBe("#abcdef");
   });
 });

@@ -279,6 +279,18 @@ describe("KirakaraPreview browser behavior", () => {
     expect(video.pause).not.toHaveBeenCalled();
   });
 
+  it("REQ-LEAD-12 does not let an active loop override Mora preview lead", async () => {
+    const { video } = await renderWorkbench("loop-keeps-mora-preview-lead");
+    installVideoBehavior(video);
+    fireEvent.click(screen.getByRole("button", { name: "1. 今日" }));
+    fireEvent.click(await screen.findByRole("button", { name: "单句循环试听" }));
+    fireEvent.click(screen.getByRole("button", { name: "う" }));
+    const input = screen.getByLabelText("Mora 开始（秒）");
+    fireEvent.change(input, { target: { value: "1.700" } });
+    fireEvent.blur(input);
+    expect(video.currentTime).toBe(1.6);
+  });
+
   it("REQ-RATE-01 uses a playback rate select", async () => {
     await renderWorkbench("rate-select");
     expect(screen.getByLabelText("播放倍速").tagName).toBe("SELECT");
@@ -322,10 +334,12 @@ describe("KirakaraPreview browser behavior", () => {
     expect(Object.keys(window.localStorage)).toEqual([]);
   });
 
-  it("REQ-SHORTCUT-07 renders all quick-location and playback-rate shortcut settings", async () => {
+  it("REQ-SHORTCUT-07 renders all line, Mora, and playback-rate shortcut settings", async () => {
     await renderWorkbench("shortcut-settings");
-    expect(screen.getAllByLabelText(/^快捷键：/)).toHaveLength(7);
+    expect(screen.getAllByLabelText(/^快捷键：/)).toHaveLength(9);
     expect((screen.getByLabelText("快捷键：上一句") as HTMLInputElement).value).toBe("U");
+    expect((screen.getByLabelText("快捷键：上一个 Mora") as HTMLInputElement).value).toBe("[");
+    expect((screen.getByLabelText("快捷键：下一个 Mora") as HTMLInputElement).value).toBe("]");
     expect((screen.getByLabelText("快捷键：提高倍速") as HTMLInputElement).value).toBe("C");
   });
 

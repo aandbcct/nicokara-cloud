@@ -38,6 +38,10 @@ export type KirakaraCanvasContext = {
   miterLimit: number;
   font: string;
   textBaseline: CanvasTextBaseline;
+  shadowColor?: string;
+  shadowBlur?: number;
+  shadowOffsetX?: number;
+  shadowOffsetY?: number;
 };
 
 type LayoutGroup = {
@@ -50,12 +54,6 @@ type LayoutGroup = {
   x: number;
 };
 
-const BEFORE_STROKE = "#000000";
-const AFTER_STROKE = "#ffffff";
-const MAIN_LETTER_SPACING = 9;
-const RUBY_LETTER_SPACING = 5;
-const RUBY_OFFSET = 4;
-const RUBY_STROKE_WIDTH = 4;
 const INDICATOR_SIZE = 34;
 const INDICATOR_SPACING = 12;
 const INDICATOR_STROKE_WIDTH = 3;
@@ -64,15 +62,28 @@ const MAIN_LINE_HEIGHT = 1.2;
 const RUBY_LINE_HEIGHT = 1.1;
 const baselineCache = new Map<string, number>();
 
-function drawText(context: KirakaraCanvasContext, text: string, x: number, y: number, fill: string, stroke: string): void {
+function drawText(
+  context: KirakaraCanvasContext,
+  text: string,
+  x: number,
+  y: number,
+  fill: string,
+  stroke: string,
+  shadowColor: string,
+  shadowDepth: number,
+): void {
   context.save();
   context.lineJoin = "round";
   context.miterLimit = 2;
+  context.shadowColor = shadowDepth > 0 ? shadowColor : "transparent";
+  context.shadowBlur = Math.ceil(shadowDepth / 2);
+  context.shadowOffsetX = shadowDepth;
+  context.shadowOffsetY = shadowDepth;
   context.strokeStyle = stroke;
-  context.strokeText(text, x, y);
-  context.restore();
+  if (context.lineWidth > 0) context.strokeText(text, x, y);
   context.fillStyle = fill;
   context.fillText(text, x, y);
+  context.restore();
 }
 
 function fallbackCharacters(unit: KirakaraFrameUnit): KirakaraFrameCharacter[] {
@@ -195,7 +206,7 @@ function layoutLine(
 ): LayoutGroup[] {
   const mainFontSize = style.fontSize * scaleY;
   const rubyFontSize = style.rubySize * scaleY;
-  const mainFont = `700 ${mainFontSize}px ${style.fontFamily}`;
+  const mainFont = `${style.fontBold ? "700" : "normal"} ${mainFontSize}px ${style.fontFamily}`;
   const rubyFont = `400 ${rubyFontSize}px ${style.fontFamily}`;
   const sourceGroups = line.units.flatMap((unit) => splitUnit(unit));
 
@@ -207,13 +218,13 @@ function layoutLine(
       x: 0,
     }));
     const baseWidth = characters.reduce((width, character) => width + character.width, 0)
-      + Math.max(0, characters.length - 1) * MAIN_LETTER_SPACING * scaleX;
+      + Math.max(0, characters.length - 1) * style.letterSpacing * scaleX;
     context.font = rubyFont;
     const rubyCharacters = group.ruby ? [...group.ruby.text] : [];
     const rubyWidth = rubyCharacters.reduce(
       (width, character) => width + context.measureText(character).width,
       0,
-    ) + Math.max(0, rubyCharacters.length - 1) * RUBY_LETTER_SPACING * scaleX;
+    ) + Math.max(0, rubyCharacters.length - 1) * style.rubyLetterSpacing * scaleX;
     const effectiveWidth = Math.max(baseWidth, rubyWidth);
     return {
       ...group,
@@ -226,17 +237,17 @@ function layoutLine(
     };
   });
 
-  const groupSpacing = MAIN_LETTER_SPACING * scaleX;
+  const groupSpacing = style.letterSpacing * scaleX;
   const totalWidth = groups.reduce((total, group) => total + group.effectiveWidth, 0)
     + Math.max(0, groups.length - 1) * groupSpacing;
-  const left = 128 * scaleX;
+  const left = style.horizontalMargin * scaleX;
   let cursorX = line.slot === "upper" ? left : context.canvas.width - left - totalWidth;
   for (const group of groups) {
     group.x = cursorX;
     let characterX = cursorX + group.isolatePad;
     for (const character of group.characters) {
       character.x = characterX;
-      characterX += character.width + MAIN_LETTER_SPACING * scaleX;
+      characterX += character.width + style.letterSpacing * scaleX;
     }
     cursorX += group.effectiveWidth + groupSpacing;
   }
@@ -252,14 +263,14 @@ function drawLine(
 ): void {
   const fontSize = style.fontSize * scaleY;
   const rubyFontSize = style.rubySize * scaleY;
-  const mainFont = `700 ${fontSize}px ${style.fontFamily}`;
+  const mainFont = `${style.fontBold ? "700" : "normal"} ${fontSize}px ${style.fontFamily}`;
   const rubyFont = `400 ${rubyFontSize}px ${style.fontFamily}`;
   const groups = layoutLine(context, line, style, scaleX, scaleY);
   const lineTop = (line.slot === "upper" ? style.upperY : style.lowerY) * scaleY;
   const baseline = lineTop + measureBaselineOffset(
     fontSize,
     style.fontFamily,
-    "700",
+    style.fontBold ? "700" : "normal",
     MAIN_LINE_HEIGHT,
   );
   const rubyBaselineOffset = measureBaselineOffset(
@@ -269,7 +280,7 @@ function drawLine(
     RUBY_LINE_HEIGHT,
   );
   const rubyBaseline = lineTop
-    - RUBY_OFFSET * scaleY
+    - style.rubyOffset * scaleY
     - (rubyFontSize * RUBY_LINE_HEIGHT - rubyBaselineOffset);
 
   const previousAlpha = context.globalAlpha ?? 1;
@@ -279,9 +290,9 @@ function drawLine(
     const radius = INDICATOR_SIZE * scaleY / 2;
     const dotSize = INDICATOR_SIZE * scaleY;
     const spacing = INDICATOR_SPACING * scaleX;
-    const baseX = 128 * scaleX;
+    const baseX = style.horizontalMargin * scaleX;
     const baseY = lineTop
-      - (style.rubySize + RUBY_OFFSET + INDICATOR_OFFSET_Y) * scaleY;
+      - (style.rubySize + style.rubyOffset + INDICATOR_OFFSET_Y) * scaleY;
     line.indicatorOpacities.forEach((opacity, index) => {
       if (opacity <= 0) return;
       context.globalAlpha = previousAlpha * (line.opacity ?? 1) * opacity;
@@ -308,7 +319,7 @@ function drawLine(
     const mainStrokeWidth = style.strokeWidth * scaleY;
     context.lineWidth = mainStrokeWidth * 2.2;
     for (const character of group.characters) {
-      drawText(context, character.text, character.x, baseline, style.colorBefore, BEFORE_STROKE);
+      drawText(context, character.text, character.x, baseline, style.colorBefore, style.strokeColorBefore, style.shadowColor, style.shadowDepth * scaleY);
       context.save();
       context.beginPath();
       clipCharacter(
@@ -321,14 +332,14 @@ function drawLine(
         mainStrokeWidth,
       );
       context.clip();
-      drawText(context, character.text, character.x, baseline, style.colorAfter, AFTER_STROKE);
+      drawText(context, character.text, character.x, baseline, style.colorAfter, style.strokeColorAfter, style.shadowColor, style.shadowDepth * scaleY);
       context.restore();
     }
 
     if (!group.ruby) continue;
     const rubyX = group.x + (group.effectiveWidth - group.rubyWidth) / 2;
     context.font = rubyFont;
-    const rubyStrokeWidth = RUBY_STROKE_WIDTH * scaleY;
+    const rubyStrokeWidth = Math.round(style.strokeWidth * 0.8) * scaleY;
     context.lineWidth = rubyStrokeWidth * 2.2;
     const groupProgress = group.characters.length > 0
       ? group.characters.reduce((progress, character) => progress + character.progress, 0)
@@ -346,7 +357,7 @@ function drawLine(
     for (let index = 0; index < rubyCharacters.length; index += 1) {
       const { text, progress } = rubyCharacters[index];
       const width = context.measureText(text).width;
-      drawText(context, text, characterX, rubyBaseline, style.colorBefore, BEFORE_STROKE);
+      drawText(context, text, characterX, rubyBaseline, style.colorBefore, style.strokeColorBefore, style.shadowColor, style.shadowDepth * scaleY);
       context.save();
       context.beginPath();
       clipCharacter(
@@ -359,9 +370,9 @@ function drawLine(
         rubyStrokeWidth,
       );
       context.clip();
-      drawText(context, text, characterX, rubyBaseline, style.colorAfter, AFTER_STROKE);
+      drawText(context, text, characterX, rubyBaseline, style.colorAfter, style.strokeColorAfter, style.shadowColor, style.shadowDepth * scaleY);
       context.restore();
-      characterX += width + RUBY_LETTER_SPACING * scaleX;
+      characterX += width + style.rubyLetterSpacing * scaleX;
     }
   }
   context.globalAlpha = previousAlpha;

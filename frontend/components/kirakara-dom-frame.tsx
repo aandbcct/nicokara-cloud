@@ -17,17 +17,10 @@ import type {
 
 const DESIGN_WIDTH = 1280;
 const DESIGN_HEIGHT = 720;
-const LINE_LEFT = 128;
-const MAIN_LETTER_SPACING = 9;
-const RUBY_LETTER_SPACING = 5;
-const RUBY_OFFSET = 4;
-const RUBY_STROKE_WIDTH = 4;
 const INDICATOR_SIZE = 34;
 const INDICATOR_SPACING = 12;
 const INDICATOR_STROKE_WIDTH = 3;
 const INDICATOR_OFFSET_Y = 8;
-const BEFORE_STROKE = "#000000";
-const AFTER_STROKE = "#ffffff";
 const strokeCache = new Map<string, string>();
 const textMetricsCache = new Map<string, {
   width: number;
@@ -106,6 +99,21 @@ function strokeShadow(color: string, width: number): string {
   return value;
 }
 
+function textEffectShadow(
+  strokeColor: string,
+  strokeWidth: number,
+  shadowColor: string,
+  shadowDepth: number,
+): string {
+  const effects = [strokeShadow(strokeColor, strokeWidth)].filter(
+    (effect) => effect !== "none",
+  );
+  if (shadowDepth > 0) {
+    effects.push(`${shadowDepth}px ${shadowDepth}px ${Math.ceil(shadowDepth / 2)}px ${shadowColor}`);
+  }
+  return effects.join(",") || "none";
+}
+
 function clipOverpull(): string {
   return typeof navigator !== "undefined" && /Firefox/i.test(navigator.userAgent)
     ? "-0.5px"
@@ -175,6 +183,8 @@ function TextMask({
   strokeBefore,
   strokeAfter,
   strokeWidth,
+  shadowColor,
+  shadowDepth,
   ruby = false,
 }: {
   text: string;
@@ -188,6 +198,8 @@ function TextMask({
   strokeBefore: string;
   strokeAfter: string;
   strokeWidth: number;
+  shadowColor: string;
+  shadowDepth: number;
   ruby?: boolean;
 }) {
   const safePad = strokeWidth > 0 ? Math.max(1, strokeWidth) : 0;
@@ -231,7 +243,7 @@ function TextMask({
         style={{
           ...baseStyle,
           color: colorBefore,
-          textShadow: strokeShadow(strokeBefore, strokeWidth),
+          textShadow: textEffectShadow(strokeBefore, strokeWidth, shadowColor, shadowDepth),
         }}
       >
         {text}
@@ -243,7 +255,7 @@ function TextMask({
           left: 0,
           top: 0,
           color: colorAfter,
-          textShadow: strokeShadow(strokeAfter, strokeWidth),
+          textShadow: textEffectShadow(strokeAfter, strokeWidth, shadowColor, shadowDepth),
           clipPath: `inset(-50% calc(${rightClip}% + ${clipOverpull()}) -50% ${leftClip})`,
         }}
       >
@@ -280,7 +292,7 @@ function LyricGroup({ group, style, last }: {
         display: "inline-grid",
         alignItems: "end",
         justifyItems: "center",
-        marginRight: last ? 0 : `${MAIN_LETTER_SPACING}px`,
+        marginRight: last ? 0 : `${style.letterSpacing}px`,
       }}
     >
       {group.ruby && (
@@ -305,7 +317,7 @@ function LyricGroup({ group, style, last }: {
                 display: "inline-block",
                 marginRight: index === rubyCharacters.length - 1
                   ? 0
-                  : `${RUBY_LETTER_SPACING}px`,
+                  : `${style.rubyLetterSpacing}px`,
               }}
             >
               {text}
@@ -327,13 +339,15 @@ function LyricGroup({ group, style, last }: {
             progress={character.progress}
             fontFamily={style.fontFamily}
             fontSize={style.fontSize}
-            fontWeight={700}
-            spacing={index === group.characters.length - 1 ? 0 : MAIN_LETTER_SPACING}
+            fontWeight={style.fontBold ? 700 : 400}
+            spacing={index === group.characters.length - 1 ? 0 : style.letterSpacing}
             colorBefore={style.colorBefore}
             colorAfter={style.colorAfter}
-            strokeBefore={BEFORE_STROKE}
-            strokeAfter={AFTER_STROKE}
+            strokeBefore={style.strokeColorBefore}
+            strokeAfter={style.strokeColorAfter}
             strokeWidth={style.strokeWidth}
+            shadowColor={style.shadowColor}
+            shadowDepth={style.shadowDepth}
           />
         ))}
       </span>
@@ -341,7 +355,7 @@ function LyricGroup({ group, style, last }: {
         <span
           style={{
             position: "absolute",
-            bottom: `calc(100% + ${RUBY_OFFSET}px)`,
+            bottom: `calc(100% + ${style.rubyOffset}px)`,
             left: "50%",
             display: "inline-flex",
             transform: "translateX(-50%)",
@@ -356,12 +370,14 @@ function LyricGroup({ group, style, last }: {
               fontFamily={style.fontFamily}
               fontSize={style.rubySize}
               fontWeight={400}
-              spacing={index === rubyCharacters.length - 1 ? 0 : RUBY_LETTER_SPACING}
+              spacing={index === rubyCharacters.length - 1 ? 0 : style.rubyLetterSpacing}
               colorBefore={style.colorBefore}
               colorAfter={style.colorAfter}
-              strokeBefore={BEFORE_STROKE}
-              strokeAfter={AFTER_STROKE}
-              strokeWidth={RUBY_STROKE_WIDTH}
+              strokeBefore={style.strokeColorBefore}
+              strokeAfter={style.strokeColorAfter}
+              strokeWidth={Math.round(style.strokeWidth * 0.8)}
+              shadowColor={style.shadowColor}
+              shadowDepth={style.shadowDepth}
               ruby
             />
           ))}
@@ -380,7 +396,9 @@ function LyricLine({ line, style }: { line: KirakaraFrameLine; style: KirakaraSt
       style={{
         position: "absolute",
         top: `${upper ? style.upperY : style.lowerY}px`,
-        ...(upper ? { left: `${LINE_LEFT}px` } : { right: `${LINE_LEFT}px` }),
+        ...(upper
+          ? { left: `${style.horizontalMargin}px` }
+          : { right: `${style.horizontalMargin}px` }),
         display: "flex",
         alignItems: "flex-end",
         whiteSpace: "nowrap",
@@ -392,7 +410,7 @@ function LyricLine({ line, style }: { line: KirakaraFrameLine; style: KirakaraSt
           style={{
             position: "absolute",
             left: 0,
-            bottom: `calc(100% + ${style.rubySize + RUBY_OFFSET + INDICATOR_OFFSET_Y}px)`,
+            bottom: `calc(100% + ${style.rubySize + style.rubyOffset + INDICATOR_OFFSET_Y}px)`,
             display: "flex",
             alignItems: "flex-end",
             gap: `${INDICATOR_SPACING}px`,

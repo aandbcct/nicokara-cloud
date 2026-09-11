@@ -189,6 +189,53 @@ describe("KirakaraReviewEditor browser behavior", () => {
     }));
   });
 
+  it("REQ-INPUT-04 clamps an overflowing line end and refreshes the draft", () => {
+    const onChange = vi.fn();
+    renderEditor({ onChange });
+    const input = screen.getByLabelText("结束时间（秒）");
+    fireEvent.change(input, { target: { value: "4.000" } });
+    fireEvent.blur(input);
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      lines: expect.arrayContaining([expect.objectContaining({ endMs: 3000 })]),
+    }));
+    expect((input as HTMLInputElement).value).toBe("3.000");
+  });
+
+  it("REQ-LEAD-11 uses preview lead after a precise Mora edit", () => {
+    const onSeek = vi.fn();
+    renderEditor({ onSeek });
+    fireEvent.click(screen.getByRole("button", { name: "う" }));
+    const input = screen.getByLabelText("Mora 开始（秒）");
+    fireEvent.change(input, { target: { value: "1.700" } });
+    fireEvent.blur(input);
+    expect(onSeek).toHaveBeenCalledWith(1600);
+  });
+
+  it("REQ-MORA-SHORTCUT-01 selects the next Mora with the default right bracket", () => {
+    renderEditor();
+    fireEvent.keyDown(window, { key: "]" });
+    expect(screen.getByText("当前 Mora：きょ")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "]" });
+    expect(screen.getByText("当前 Mora：う")).toBeTruthy();
+  });
+
+  it("REQ-MORA-SHORTCUT-02 selects the previous Mora with the default left bracket", () => {
+    renderEditor();
+    fireEvent.keyDown(window, { key: "[" });
+    expect(screen.getByText("当前 Mora：う")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "[" });
+    expect(screen.getByText("当前 Mora：きょ")).toBeTruthy();
+  });
+
+  it("REQ-TIME-07 uses a smaller mouse hit area than the density threshold", () => {
+    const { container } = renderEditor();
+    fireEvent.click(screen.getByRole("button", { name: "きょ" }));
+    const boundary = container.querySelector<HTMLElement>('[data-mora-boundary="0"]');
+    expect(boundary?.style.width).toBe("12px");
+    expect(container.querySelector('[data-mora-timeline="true"]')?.getAttribute("data-boundary-gap-px")).toBe("20");
+  });
+
   it("REQ-OPERATION-01 separates whole-line controls from the Mora color blocks", () => {
     const { container } = renderEditor();
     expect(container.querySelector('[data-line-move="true"]')?.getAttribute("title")).toBe("整句平移");

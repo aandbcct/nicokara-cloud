@@ -39,6 +39,8 @@ export enum PlaybackShortcut {
   NextLine = "next-line",
   ReplayLine = "replay-line",
   ToggleLineLoop = "toggle-line-loop",
+  PreviousMora = "previous-mora",
+  NextMora = "next-mora",
   RateDown = "rate-down",
   RateUp = "rate-up",
   RateToggle = "rate-toggle",
@@ -52,6 +54,8 @@ export type PlaybackShortcutBindings = Record<
   | PlaybackShortcut.NextLine
   | PlaybackShortcut.ReplayLine
   | PlaybackShortcut.ToggleLineLoop
+  | PlaybackShortcut.PreviousMora
+  | PlaybackShortcut.NextMora
   | PlaybackShortcut.RateDown
   | PlaybackShortcut.RateUp
   | PlaybackShortcut.RateToggle,
@@ -63,6 +67,8 @@ export const DEFAULT_PLAYBACK_SHORTCUT_BINDINGS: PlaybackShortcutBindings = {
   [PlaybackShortcut.NextLine]: "i",
   [PlaybackShortcut.ReplayLine]: "o",
   [PlaybackShortcut.ToggleLineLoop]: "p",
+  [PlaybackShortcut.PreviousMora]: "[",
+  [PlaybackShortcut.NextMora]: "]",
   [PlaybackShortcut.RateToggle]: "z",
   [PlaybackShortcut.RateDown]: "x",
   [PlaybackShortcut.RateUp]: "c",

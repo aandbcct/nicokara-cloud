@@ -103,4 +103,47 @@ describe("KirakaraDomFrame", () => {
     expect(html.match(/data-kirakara-character=/g)).toHaveLength(3);
     expect(html).not.toContain('data-kirakara-ruby-sizer="true"');
   });
+
+  it("REQ-STYLE-DOM-01 applies typography, outline, shadow, and safe margin", async () => {
+    const renderer = await loadDomFrame();
+    expect(renderer, "Kirakara DOM renderer should exist").not.toBeNull();
+    if (!renderer) return;
+
+    const frame = {
+      lines: [{
+        slot: "upper" as const,
+        text: "歌",
+        units: [{
+          text: "歌",
+          progress: 0,
+          characters: [{ text: "歌", progress: 0 }],
+          ruby: [{ text: "うた", startCharacter: 0, endCharacter: 1 }],
+        }],
+      }],
+    } as unknown as KirakaraFrame;
+    const html = renderToStaticMarkup(
+      <renderer.KirakaraDomFrame
+        frame={frame}
+        style={{
+          ...DEFAULT_KIRAKARA_STYLE,
+          fontBold: false,
+          letterSpacing: 3,
+          rubyLetterSpacing: 2,
+          rubyOffset: 8,
+          strokeColorBefore: "#123456",
+          strokeColorAfter: "#abcdef",
+          shadowColor: "#654321",
+          shadowDepth: 4,
+          horizontalMargin: 96,
+        }}
+      />,
+    );
+
+    expect(html).toContain("left:96px");
+    expect(html).toContain("font-weight:400");
+    expect(html).toContain("bottom:calc(100% + 8px)");
+    expect(html).toContain("4px 4px 2px #654321");
+    expect(html).toContain("#123456");
+    expect(html).toContain("#abcdef");
+  });
 });
