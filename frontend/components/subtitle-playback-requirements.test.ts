@@ -8,6 +8,7 @@ const requirementTestFiles = [
   "./kirakara-review-editor.browser.test.tsx",
   "./kirakara-preview.test.tsx",
   "./kirakara-preview.browser.test.tsx",
+  "./kirakara-style-editor.test.tsx",
   "./subtitle-playback-requirements.test.ts",
 ];
 
@@ -17,13 +18,15 @@ const requirementTitles = requirementTestFiles.flatMap((relativePath) => {
 });
 
 const automatedRequirementIds = [
+  "REQ-EXPORT-01",
   "REQ-FOLLOW-03", "REQ-FOLLOW-04",
   "REQ-KEY-01", "REQ-KEY-02", "REQ-KEY-03", "REQ-KEY-04", "REQ-KEY-05",
   "REQ-LAYOUT-01", "REQ-LAYOUT-02", "REQ-LAYOUT-03", "REQ-LAYOUT-04", "REQ-LAYOUT-05", "REQ-LAYOUT-06", "REQ-LAYOUT-07",
   "REQ-LEAD-01", "REQ-LEAD-02", "REQ-LEAD-03", "REQ-LEAD-04", "REQ-LEAD-05", "REQ-LEAD-06", "REQ-LEAD-07", "REQ-LEAD-08", "REQ-LEAD-09", "REQ-LEAD-10",
   "REQ-LIST-01", "REQ-LIST-02", "REQ-LIST-03", "REQ-LIST-04",
   "REQ-PIN-01", "REQ-PIN-02", "REQ-PIN-03",
-  "REQ-PLACEMENT-01", "REQ-PLACEMENT-02", "REQ-PLACEMENT-03",
+  "REQ-PLACEMENT-01", "REQ-PLACEMENT-02", "REQ-PLACEMENT-03", "REQ-PLACEMENT-04", "REQ-PLACEMENT-05", "REQ-PLACEMENT-06",
+  "REQ-STYLE-LAYOUT-01",
   "REQ-PLAY-01", "REQ-PLAY-02", "REQ-PLAY-03", "REQ-PLAY-05", "REQ-PLAY-06", "REQ-PLAY-07",
   "REQ-RATE-01", "REQ-RATE-02", "REQ-RATE-03", "REQ-RATE-04", "REQ-RATE-05", "REQ-RATE-06", "REQ-RATE-07", "REQ-RATE-08", "REQ-RATE-09", "REQ-RATE-10", "REQ-RATE-11", "REQ-RATE-12", "REQ-RATE-13", "REQ-RATE-14",
   "REQ-SELECT-01", "REQ-SELECT-02", "REQ-SELECT-03",

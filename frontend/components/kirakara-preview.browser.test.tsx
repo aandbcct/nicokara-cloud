@@ -350,6 +350,27 @@ describe("KirakaraPreview browser behavior", () => {
     expect(screen.getByRole("heading", { name: "字幕样式" })).toBeTruthy();
   });
 
+  it("REQ-PLACEMENT-04 matches the side panel height to the video surface", async () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      bottom: 360,
+      height: 360,
+      left: 0,
+      right: 640,
+      top: 0,
+      width: 640,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    try {
+      const { container } = await renderWorkbench("equal-height-side-panel");
+      const controlsPanel = container.querySelector<HTMLElement>('[data-kirakara-controls-panel="true"]');
+      await waitFor(() => expect(controlsPanel?.style.getPropertyValue("--kirakara-preview-height")).toBe("360px"));
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
   it("REQ-PLACEMENT-02 orders the timeline before the side tabs in vertical flow", async () => {
     const { container } = await renderWorkbench("vertical-panel-order");
     const timelinePanel = container.querySelector('[data-kirakara-timeline-panel="true"]');
@@ -358,5 +379,13 @@ describe("KirakaraPreview browser behavior", () => {
       ? timelinePanel.compareDocumentPosition(controlsPanel)
       : 0;
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("REQ-EXPORT-01 keeps download actions in the export card", async () => {
+    const { container } = await renderWorkbench("separate-export-card");
+    const downloads = container.querySelector('[data-reviewed-data-downloads="true"]');
+    expect(downloads?.closest('[data-kirakara-export-panel="true"]')).toBeTruthy();
+    expect(downloads?.closest('[data-kirakara-controls-panel="true"]')).toBeNull();
+    expect(screen.getByRole("heading", { name: "导出" })).toBeTruthy();
   });
 });

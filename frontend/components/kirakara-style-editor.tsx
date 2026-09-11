@@ -34,8 +34,8 @@ function RangeField({
   onChange: (value: number) => void;
 }) {
   return (
-    <label className="grid gap-2 text-sm font-medium">
-      <span className="flex items-center justify-between gap-3">
+    <label className="grid min-w-0 gap-2 text-sm font-medium">
+      <span className="flex items-center justify-between gap-3 whitespace-nowrap">
         {label}
         <span className="tabular-nums text-muted-foreground">{value}{unit}</span>
       </span>
@@ -80,9 +80,9 @@ export function KirakaraStyleEditor({
         </button>
       </div>
 
-      <div className="mt-3 grid gap-x-5 gap-y-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-3 grid min-w-0 gap-4">
         <label
-          className="grid gap-2 text-sm font-medium sm:col-span-2"
+          className="grid min-w-0 gap-2 text-sm font-medium"
           data-kirakara-font-control="kirakara"
         >
           字体
@@ -119,17 +119,19 @@ export function KirakaraStyleEditor({
             </span>
           </span>
         </label>
-        <RangeField label="描边" value={style.strokeWidth} min={2} max={8} onChange={(strokeWidth) => update({ strokeWidth })} />
-        <RangeField label="主字大小" value={style.fontSize} min={48} max={80} onChange={(fontSize) => update({ fontSize })} />
-        <RangeField label="注音大小" value={style.rubySize} min={18} max={38} onChange={(rubySize) => update({ rubySize })} />
-        <RangeField label="上行位置" value={style.upperY} min={320} max={560} onChange={(upperY) => update({ upperY })} />
-        <RangeField label="下行位置" value={style.lowerY} min={440} max={680} onChange={(lowerY) => update({ lowerY })} />
-        <div className="grid grid-cols-2 gap-3">
-          <label className="grid gap-1 text-xs font-medium">
+        <div className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3">
+          <RangeField label="描边" value={style.strokeWidth} min={2} max={8} onChange={(strokeWidth) => update({ strokeWidth })} />
+          <RangeField label="主字大小" value={style.fontSize} min={48} max={80} onChange={(fontSize) => update({ fontSize })} />
+          <RangeField label="注音大小" value={style.rubySize} min={18} max={38} onChange={(rubySize) => update({ rubySize })} />
+          <RangeField label="上行位置" value={style.upperY} min={320} max={560} onChange={(upperY) => update({ upperY })} />
+          <RangeField label="下行位置" value={style.lowerY} min={440} max={680} onChange={(lowerY) => update({ lowerY })} />
+        </div>
+        <div className="grid min-w-0 grid-cols-2 gap-3">
+          <label className="grid min-w-0 gap-1 whitespace-nowrap text-xs font-medium">
             未唱颜色
             <input type="color" value={style.colorBefore} onChange={(event) => update({ colorBefore: event.target.value })} className="h-9 w-full cursor-pointer rounded-md border bg-background p-1" />
           </label>
-          <label className="grid gap-1 text-xs font-medium">
+          <label className="grid min-w-0 gap-1 whitespace-nowrap text-xs font-medium">
             已唱颜色
             <input type="color" value={style.colorAfter} onChange={(event) => update({ colorAfter: event.target.value })} className="h-9 w-full cursor-pointer rounded-md border bg-background p-1" />
           </label>

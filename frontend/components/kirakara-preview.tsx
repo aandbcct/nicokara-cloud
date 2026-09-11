@@ -1,7 +1,7 @@
 "use client";
 
 import { Cloud, Film, FolderOpen, LoaderCircle, RefreshCw, Settings2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { KirakaraDomFrame } from "@/components/kirakara-dom-frame";
 import { KirakaraRenderActions } from "@/components/kirakara-render-actions";
@@ -206,6 +206,7 @@ export function KirakaraPreview({
   onVideoElementChange?: (element: HTMLVideoElement | null) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const previewSurfaceRef = useRef<HTMLDivElement>(null);
   const frameLoop = useRef<ReturnType<typeof createPreviewFrameLoop> | null>(null);
   const componentActive = useRef(true);
   const activeJobId = useRef(jobId);
@@ -231,6 +232,7 @@ export function KirakaraPreview({
   const [lastNonDefaultRate, setLastNonDefaultRate] = useState(0.9);
   const [rateNotice, setRateNotice] = useState<number | null>(null);
   const [sideTab, setSideTab] = useState(WorkbenchSideTab.Lyrics);
+  const [previewSurfaceHeight, setPreviewSurfaceHeight] = useState<number | null>(null);
   const rateNoticeTimer = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const [previewLeadMs, setPreviewLeadMs] = useState(() =>
     typeof window === "undefined"
@@ -288,6 +290,19 @@ export function KirakaraPreview({
   useEffect(() => () => {
     if (rateNoticeTimer.current !== null) globalThis.clearTimeout(rateNoticeTimer.current);
   }, []);
+
+  useEffect(() => {
+    const surface = previewSurfaceRef.current;
+    if (!surface) return;
+    const updateHeight = () => {
+      const nextHeight = Math.round(surface.getBoundingClientRect().height);
+      if (nextHeight > 0) setPreviewSurfaceHeight(nextHeight);
+    };
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(surface);
+    return () => observer.disconnect();
+  }, [video]);
 
   useEffect(() => {
     let active = true;
@@ -674,7 +689,11 @@ export function KirakaraPreview({
             data-kirakara-preview-panel="true"
             className="min-w-0 lg:col-start-1 lg:row-start-1"
           >
-            <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black">
+            <div
+              ref={previewSurfaceRef}
+              data-kirakara-preview-surface="true"
+              className="relative aspect-video w-full overflow-hidden rounded-lg bg-black"
+            >
               {videoUrl && (
                 <video
                   ref={assignVideoElement}
@@ -767,7 +786,7 @@ export function KirakaraPreview({
 
           <div
             data-kirakara-timeline-panel="true"
-            className={`min-w-0 lg:col-start-1 lg:row-start-2 ${
+            className={`min-w-0 lg:col-span-2 lg:row-start-2 ${
               timeline
                 ? "rounded-lg border bg-background/40 p-3"
                 : "hidden"
@@ -859,14 +878,19 @@ export function KirakaraPreview({
 
           <div
             data-kirakara-controls-panel="true"
-            className={`min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-1 ${
+            style={{
+              "--kirakara-preview-height": previewSurfaceHeight === null
+                ? "auto"
+                : `${previewSurfaceHeight}px`,
+            } as CSSProperties}
+            className={`min-w-0 lg:col-start-2 lg:row-start-1 lg:h-[var(--kirakara-preview-height)] lg:overflow-hidden ${
               timeline
                 ? "rounded-lg border bg-background/40 p-3"
                 : "hidden"
             }`}
           >
             {timeline && (
-              <div className="min-w-0">
+              <div className="flex h-full min-w-0 flex-col">
                 <div role="tablist" aria-label="歌词与字幕样式" className="mb-3 grid grid-cols-2 rounded-md border bg-muted/30 p-1">
                   <button
                     type="button"
@@ -887,39 +911,59 @@ export function KirakaraPreview({
                     字幕样式
                   </button>
                 </div>
-                {sideTab === WorkbenchSideTab.Lyrics ? (
-                  <KirakaraLyricNavigator
-                    timeline={timeline}
-                    playbackLineIndex={playbackLineIndex}
-                    editingLineIndex={editingLineIndex}
-                    onSelect={selectEditingLine}
-                  />
-                ) : (
-                  <KirakaraStyleEditor style={style} onChange={updateStyle} />
-                )}
+                <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                  {sideTab === WorkbenchSideTab.Lyrics ? (
+                    <KirakaraLyricNavigator
+                      timeline={timeline}
+                      playbackLineIndex={playbackLineIndex}
+                      editingLineIndex={editingLineIndex}
+                      onSelect={selectEditingLine}
+                    />
+                  ) : (
+                    <KirakaraStyleEditor style={style} onChange={updateStyle} />
+                  )}
+                </div>
               </div>
             )}
-            {timeline && capabilities && (
-              <div className="mt-4 min-w-0 space-y-3 border-t pt-4 [&>div]:mt-0 [&>div]:border-t-0 [&>div]:pt-0">
+          </div>
+
+          <section
+            data-kirakara-export-panel="true"
+            aria-labelledby="kirakara-export-heading"
+            className={`min-w-0 lg:col-span-2 lg:row-start-3 ${
+              timeline
+                ? "rounded-lg border bg-background/40 p-3"
+                : "hidden"
+            }`}
+          >
+            {timeline && (
+              <>
+                <h3 id="kirakara-export-heading" className="mb-3 text-base font-bold">导出</h3>
+                <div className="min-w-0 space-y-3 [&>div]:mt-0 [&>div]:border-t-0 [&>div]:pt-0">
                 <ReviewedDataDownloads
                   jobId={jobId}
                   videoName={expectedVideoName}
                   timeline={timeline}
                   style={style}
                 />
-                <KirakaraRenderActions
-                  capabilities={capabilities}
-                  video={video}
-                  timeline={timeline}
-                  style={style}
-                  jobId={jobId}
-                  vocalMode={vocalMode}
-                  rerender={hasCloudResult}
-                  onCloudRenderQueued={onCloudRenderQueued}
-                />
-              </div>
+                  {capabilities ? (
+                    <KirakaraRenderActions
+                      capabilities={capabilities}
+                      video={video}
+                      timeline={timeline}
+                      style={style}
+                      jobId={jobId}
+                      vocalMode={vocalMode}
+                      rerender={hasCloudResult}
+                      onCloudRenderQueued={onCloudRenderQueued}
+                    />
+                  ) : (
+                    <p className="text-xs text-muted-foreground">正在检查可用的导出方式…</p>
+                  )}
+                </div>
+              </>
             )}
-          </div>
+          </section>
         </div>
       )}
 

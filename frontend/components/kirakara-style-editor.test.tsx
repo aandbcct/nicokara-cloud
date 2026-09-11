@@ -5,7 +5,7 @@ import { KirakaraStyleEditor } from "./kirakara-style-editor";
 import { DEFAULT_KIRAKARA_STYLE } from "@/lib/kirakara-style";
 
 describe("KirakaraStyleEditor", () => {
-  it("exposes a compact set of Kirakara style controls", () => {
+  it("REQ-STYLE-LAYOUT-01 keeps narrow-panel labels horizontal", () => {
     const html = renderToStaticMarkup(
       <KirakaraStyleEditor
         style={DEFAULT_KIRAKARA_STYLE}
@@ -26,7 +26,9 @@ describe("KirakaraStyleEditor", () => {
     expect(html).toContain('data-kirakara-style-layout="responsive"');
     expect(html).toContain('data-kirakara-font-control="kirakara"');
     expect(html).toContain('aria-label="选择字体预设"');
-    expect(html).toContain("xl:grid-cols-4");
+    expect(html).toContain("whitespace-nowrap");
+    expect(html).toContain("grid-cols-2");
+    expect(html).not.toContain("xl:grid-cols-4");
     expect(html).not.toContain("<datalist");
   });
 });

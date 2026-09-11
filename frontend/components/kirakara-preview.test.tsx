@@ -90,29 +90,30 @@ describe("KirakaraPreview", () => {
     expect(html).not.toContain("<canvas");
   });
 
-  it("uses a compact desktop workbench with preview and timeline above the controls", async () => {
+  it("REQ-PLACEMENT-05 spans the timeline across the video and side panel", async () => {
     const preview = await loadPreview();
     expect(preview).not.toBeNull();
     if (!preview) return;
-    rememberLocalVideo("job-responsive-preview", new File(["video"], "song.mp4"));
+    rememberLocalVideo("job-wide-timeline", new File(["video"], "song.mp4"));
 
     const html = renderToStaticMarkup(
-      <preview.KirakaraPreview
-        jobId="job-responsive-preview"
-        expectedVideoName="song.mp4"
-      />,
+      <preview.KirakaraPreview jobId="job-wide-timeline" expectedVideoName="song.mp4" />,
     );
 
-    expect(html).toContain('data-kirakara-workbench="desktop-fit"');
-    expect(html).toContain('data-kirakara-preview-panel="true"');
-    expect(html).toContain('data-kirakara-timeline-panel="true"');
-    expect(html).toContain('data-kirakara-controls-panel="true"');
-    expect(html).toContain("xl:grid-cols-[minmax(0,1.55fr)_minmax(20rem,0.7fr)]");
-    expect(html).toContain("lg:col-start-1 lg:row-start-1");
-    expect(html).toContain("lg:col-start-1 lg:row-start-2");
-    expect(html).toContain("lg:col-start-2 lg:row-span-2 lg:row-start-1");
-    expect(html).not.toContain("lg:max-h-[min(22rem,calc(100vh-19rem))]");
-    expect(html).not.toContain("xl:grid-cols-[minmax(0,1fr)_minmax(16rem,20rem)]");
+    expect(html).toMatch(/data-kirakara-timeline-panel="true"[^>]+lg:col-span-2 lg:row-start-2/);
+  });
+
+  it("REQ-PLACEMENT-06 places a full-width export card below the timeline", async () => {
+    const preview = await loadPreview();
+    expect(preview).not.toBeNull();
+    if (!preview) return;
+    rememberLocalVideo("job-export-panel", new File(["video"], "song.mp4"));
+
+    const html = renderToStaticMarkup(
+      <preview.KirakaraPreview jobId="job-export-panel" expectedVideoName="song.mp4" />,
+    );
+
+    expect(html).toMatch(/data-kirakara-export-panel="true"[^>]+lg:col-span-2 lg:row-start-3/);
   });
 });
 
