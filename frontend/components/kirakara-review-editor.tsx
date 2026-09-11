@@ -2,6 +2,7 @@
 
 import {
   ChevronDown,
+  CircleAlert,
   GripVertical,
   Languages,
   RotateCcw,
@@ -89,6 +90,68 @@ const TOUCH_BOUNDARY_HIT_WIDTH_PX = 24;
 const MORA_SEGMENT_TOP_PX = 18;
 const MORA_SEGMENT_HEIGHT_PX = 48;
 const MORA_TRACK_HEIGHT_PX = 74;
+const TIMELINE_HELP_DELAY_MS = 500;
+
+function TimelineHelp() {
+  const [visible, setVisible] = useState(false);
+  const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function cancelShow() {
+    if (showTimer.current !== null) {
+      clearTimeout(showTimer.current);
+      showTimer.current = null;
+    }
+  }
+
+  function scheduleShow() {
+    cancelShow();
+    showTimer.current = setTimeout(() => {
+      setVisible(true);
+      showTimer.current = null;
+    }, TIMELINE_HELP_DELAY_MS);
+  }
+
+  function hide() {
+    cancelShow();
+    setVisible(false);
+  }
+
+  useEffect(() => cancelShow, []);
+
+  return (
+    <div className="relative shrink-0" onMouseEnter={scheduleShow} onMouseLeave={hide}>
+      <button
+        type="button"
+        aria-label="查看时间轴使用说明"
+        aria-expanded={visible}
+        onFocus={() => setVisible(true)}
+        onBlur={hide}
+        className="focus-ring inline-flex size-5 items-center justify-center rounded-full text-muted-foreground/70 hover:text-muted-foreground"
+      >
+        <CircleAlert className="size-3.5" />
+      </button>
+      {visible && (
+        <div
+          role="tooltip"
+          className="absolute left-0 top-full z-50 mt-2 w-[min(34rem,calc(100vw-3rem))] rounded-md border bg-muted p-4 text-left text-xs font-normal leading-relaxed text-foreground shadow-md"
+        >
+          <p className="font-bold">使用说明</p>
+          <ol className="mt-2 list-decimal space-y-1.5 pl-4">
+            <li>时间轴不会随视频自动流转。使用“定位歌词”将当前视频歌词映射到时间轴；使用“定位预览”将时间轴映射到当前视频歌词。</li>
+            <li>“调轴设置—复听提前量”可以修改调整时间轴后的复播提前量。</li>
+          </ol>
+          <p className="mt-3 font-bold">快捷键使用</p>
+          <ol className="mt-2 list-decimal space-y-1.5 pl-4">
+            <li>使用 Z、X、C 快捷键调整播放速率，方便微调 Mora 时间轴。</li>
+            <li>调整时间轴有三种方式：① 点击 Mora 片段后使用方向键调整 Mora 首时间点，可配合 [、] 快捷键快速切换 Mora；② 鼠标拖动；③ 单击 Mora 后手动输入首尾时间点。</li>
+            <li>U、I、O、P 快捷键可快速操作视频对应的歌词及时间轴。</li>
+            <li>时间轴顶部三个聚焦点可配合方向键调整单行歌词的整体时间。</li>
+          </ol>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function seconds(milliseconds: number): string {
   return (milliseconds / 1000).toFixed(3);
@@ -636,7 +699,8 @@ export function KirakaraReviewEditor({
       >
         <section data-timing-panel="true" className="min-w-0">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex min-w-0 items-baseline gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <TimelineHelp />
               <h4 className="shrink-0 text-sm font-bold">设置时间轴</h4>
               <span className="truncate text-xs font-medium text-muted-foreground">{editingLineIndex + 1}. {line.text}</span>
               <span className="shrink-0 text-xs tabular-nums text-muted-foreground">

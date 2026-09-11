@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { KirakaraTimeline } from "@/lib/kirakara-timeline";
@@ -80,6 +80,30 @@ describe("KirakaraReviewEditor browser behavior", () => {
     renderEditor();
     expect(screen.getByRole("button", { name: "撤销" }).closest('[data-timing-panel="true"]')).toBeTruthy();
     expect(screen.getByRole("button", { name: "下一句" }).closest('[data-timing-panel="true"]')).toBeTruthy();
+  });
+
+  it("REQ-HELP-01 shows the timeline guide after a 500ms hover delay", () => {
+    vi.useFakeTimers();
+    try {
+      renderEditor();
+      const trigger = screen.getByRole("button", { name: "查看时间轴使用说明" });
+      fireEvent.mouseEnter(trigger);
+
+      act(() => vi.advanceTimersByTime(499));
+      expect(screen.queryByRole("tooltip")).toBeNull();
+      act(() => vi.advanceTimersByTime(1));
+
+      const guide = screen.getByRole("tooltip");
+      expect(guide.className).toContain("bg-muted");
+      expect(guide.textContent).toContain("定位歌词");
+      expect(guide.textContent).toContain("复听提前量");
+      expect(guide.textContent).toContain("Z、X、C");
+      expect(guide.textContent).toContain("U、I、O、P");
+      fireEvent.mouseLeave(trigger);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("REQ-KEY-05 marks all timestamp controls for playback shortcuts", () => {
