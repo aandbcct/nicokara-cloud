@@ -1,7 +1,7 @@
 "use client";
 
 import { Cloud, Film, FolderOpen, LoaderCircle, RefreshCw, Settings2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { KirakaraDomFrame } from "@/components/kirakara-dom-frame";
 import { KirakaraRenderActions } from "@/components/kirakara-render-actions";
@@ -44,7 +44,7 @@ import {
 import type { Job } from "@/types/job";
 import {
   activeTimelineLineIndex, createTimelineHistory, formatPlaybackSeconds,
-  loopPlaybackTime, playbackShortcut, PLAYBACK_RATES, PlaybackShortcut,
+  loopPlaybackTime, playbackShortcut, PLAYBACK_RATES, PLAYBACK_SEEK_STEP_MS, PlaybackShortcut,
   previewSeekMs, recordTimelineEdit, redoTimelineEdit, stepPlaybackRate,
   undoTimelineEdit, type PlaybackRange, type TimelineHistory,
 } from "@/lib/timeline-editing";
@@ -68,6 +68,18 @@ enum WorkbenchSideTab {
   Style = "style",
 }
 
+export function scrollLyricWithinNavigator(
+  navigator: Pick<HTMLElement, "clientHeight" | "scrollTop">,
+  item: Pick<HTMLElement, "offsetHeight" | "offsetTop">,
+) {
+  const itemBottom = item.offsetTop + item.offsetHeight;
+  if (item.offsetTop < navigator.scrollTop) {
+    navigator.scrollTop = item.offsetTop;
+  } else if (itemBottom > navigator.scrollTop + navigator.clientHeight) {
+    navigator.scrollTop = Math.max(0, itemBottom - navigator.clientHeight);
+  }
+}
+
 function KirakaraLyricNavigator({
   timeline,
   playbackLineIndex,
@@ -79,15 +91,22 @@ function KirakaraLyricNavigator({
   editingLineIndex: number | null;
   onSelect: (index: number) => void;
 }) {
+  const navigatorRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {
     if (playbackLineIndex === null) return;
-    itemRefs.current[playbackLineIndex]?.scrollIntoView({ block: "nearest" });
+    const navigator = navigatorRef.current;
+    const item = itemRefs.current[playbackLineIndex];
+    if (navigator && item) scrollLyricWithinNavigator(navigator, item);
   }, [playbackLineIndex]);
 
   return (
-    <div data-lyric-navigator="true" className="rounded-md border">
+    <div
+      ref={navigatorRef}
+      data-lyric-navigator="true"
+      className="max-h-[min(32rem,55vh)] overflow-y-auto rounded-md border [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+    >
       {timeline.lines.map((line, index) => {
         const playing = playbackLineIndex === index;
         const editing = editingLineIndex === index;
@@ -206,7 +225,6 @@ export function KirakaraPreview({
   onVideoElementChange?: (element: HTMLVideoElement | null) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const previewSurfaceRef = useRef<HTMLDivElement>(null);
   const frameLoop = useRef<ReturnType<typeof createPreviewFrameLoop> | null>(null);
   const componentActive = useRef(true);
   const activeJobId = useRef(jobId);
@@ -232,7 +250,6 @@ export function KirakaraPreview({
   const [lastNonDefaultRate, setLastNonDefaultRate] = useState(0.9);
   const [rateNotice, setRateNotice] = useState<number | null>(null);
   const [sideTab, setSideTab] = useState(WorkbenchSideTab.Lyrics);
-  const [previewSurfaceHeight, setPreviewSurfaceHeight] = useState<number | null>(null);
   const rateNoticeTimer = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const [previewLeadMs, setPreviewLeadMs] = useState(() =>
     typeof window === "undefined"
@@ -290,19 +307,6 @@ export function KirakaraPreview({
   useEffect(() => () => {
     if (rateNoticeTimer.current !== null) globalThis.clearTimeout(rateNoticeTimer.current);
   }, []);
-
-  useEffect(() => {
-    const surface = previewSurfaceRef.current;
-    if (!surface) return;
-    const updateHeight = () => {
-      const nextHeight = Math.round(surface.getBoundingClientRect().height);
-      if (nextHeight > 0) setPreviewSurfaceHeight(nextHeight);
-    };
-    updateHeight();
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(surface);
-    return () => observer.disconnect();
-  }, [video]);
 
   useEffect(() => {
     let active = true;
@@ -535,7 +539,16 @@ export function KirakaraPreview({
       const shortcut = playbackShortcut(event, event.target);
       if (shortcut === null) return;
       event.preventDefault();
-      if (shortcut !== PlaybackShortcut.PlayToggle) {
+      if (shortcut === PlaybackShortcut.SeekBackward || shortcut === PlaybackShortcut.SeekForward) {
+        const element = videoRef.current;
+        if (!element) return;
+        const direction = shortcut === PlaybackShortcut.SeekBackward ? -1 : 1;
+        seekVideoWithoutPlaybackChange(
+          element,
+          Math.round(element.currentTime * 1000) + direction * PLAYBACK_SEEK_STEP_MS,
+        );
+        updateFrame();
+      } else if (shortcut !== PlaybackShortcut.PlayToggle) {
         changePlaybackRate(playbackRateAfterShortcut(shortcut, playbackRate, lastNonDefaultRate));
       } else {
         const element = videoRef.current;
@@ -549,7 +562,7 @@ export function KirakaraPreview({
     }
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [changePlaybackRate, lastNonDefaultRate, playbackRate]);
+  }, [changePlaybackRate, lastNonDefaultRate, playbackRate, updateFrame]);
 
   function saveTimelineChange(nextTimeline: KirakaraTimeline) {
     setHistoryAvailability({ canUndo: Boolean(history.current?.past.length), canRedo: Boolean(history.current?.future.length) });
@@ -683,14 +696,13 @@ export function KirakaraPreview({
       ) : (
         <div
           data-kirakara-workbench="desktop-fit"
-          className="mt-4 grid items-start gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(18rem,0.75fr)] xl:grid-cols-[minmax(0,1.55fr)_minmax(20rem,0.7fr)]"
+          className="mt-4 grid items-start gap-3 lg:grid-cols-[minmax(18rem,0.7fr)_minmax(0,1.55fr)] xl:grid-cols-[minmax(20rem,0.65fr)_minmax(0,1.65fr)]"
         >
           <div
             data-kirakara-preview-panel="true"
-            className="min-w-0 lg:col-start-1 lg:row-start-1"
+            className="min-w-0 lg:col-span-2 lg:row-start-1"
           >
             <div
-              ref={previewSurfaceRef}
               data-kirakara-preview-surface="true"
               className="relative aspect-video w-full overflow-hidden rounded-lg bg-black"
             >
@@ -786,7 +798,7 @@ export function KirakaraPreview({
 
           <div
             data-kirakara-timeline-panel="true"
-            className={`min-w-0 lg:col-span-2 lg:row-start-2 ${
+            className={`min-w-0 lg:col-start-2 lg:row-start-2 ${
               timeline
                 ? "rounded-lg border bg-background/40 p-3"
                 : "hidden"
@@ -878,19 +890,14 @@ export function KirakaraPreview({
 
           <div
             data-kirakara-controls-panel="true"
-            style={{
-              "--kirakara-preview-height": previewSurfaceHeight === null
-                ? "auto"
-                : `${previewSurfaceHeight}px`,
-            } as CSSProperties}
-            className={`min-w-0 lg:col-start-2 lg:row-start-1 lg:h-[var(--kirakara-preview-height)] lg:overflow-hidden ${
+            className={`min-w-0 lg:col-start-1 lg:row-start-2 ${
               timeline
                 ? "rounded-lg border bg-background/40 p-3"
                 : "hidden"
             }`}
           >
             {timeline && (
-              <div className="flex h-full min-w-0 flex-col">
+              <div className="min-w-0">
                 <div role="tablist" aria-label="歌词与字幕样式" className="mb-3 grid grid-cols-2 rounded-md border bg-muted/30 p-1">
                   <button
                     type="button"
@@ -913,7 +920,7 @@ export function KirakaraPreview({
                 </div>
                 <div
                   data-kirakara-tab-scroll-area="true"
-                  className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  className="min-w-0"
                 >
                   {sideTab === WorkbenchSideTab.Lyrics ? (
                     <KirakaraLyricNavigator

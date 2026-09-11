@@ -90,17 +90,31 @@ describe("KirakaraPreview", () => {
     expect(html).not.toContain("<canvas");
   });
 
-  it("REQ-PLACEMENT-05 spans the timeline across the video and side panel", async () => {
+  it("REQ-PLACEMENT-07 gives the video the full workbench width", async () => {
     const preview = await loadPreview();
     expect(preview).not.toBeNull();
     if (!preview) return;
-    rememberLocalVideo("job-wide-timeline", new File(["video"], "song.mp4"));
+    rememberLocalVideo("job-wide-video", new File(["video"], "song.mp4"));
 
     const html = renderToStaticMarkup(
-      <preview.KirakaraPreview jobId="job-wide-timeline" expectedVideoName="song.mp4" />,
+      <preview.KirakaraPreview jobId="job-wide-video" expectedVideoName="song.mp4" />,
     );
 
-    expect(html).toMatch(/data-kirakara-timeline-panel="true"[^>]+lg:col-span-2 lg:row-start-2/);
+    expect(html).toMatch(/data-kirakara-preview-panel="true"[^>]+lg:col-span-2 lg:row-start-1/);
+  });
+
+  it("REQ-PLACEMENT-08 places the lyric panel left of the timeline", async () => {
+    const preview = await loadPreview();
+    expect(preview).not.toBeNull();
+    if (!preview) return;
+    rememberLocalVideo("job-editor-columns", new File(["video"], "song.mp4"));
+
+    const html = renderToStaticMarkup(
+      <preview.KirakaraPreview jobId="job-editor-columns" expectedVideoName="song.mp4" />,
+    );
+
+    expect(html).toMatch(/data-kirakara-controls-panel="true"[^>]+lg:col-start-1 lg:row-start-2/);
+    expect(html).toMatch(/data-kirakara-timeline-panel="true"[^>]+lg:col-start-2 lg:row-start-2/);
   });
 
   it("REQ-PLACEMENT-06 places a full-width export card below the timeline", async () => {

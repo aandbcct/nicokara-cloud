@@ -137,4 +137,20 @@ describe("subtitle playback requirements", () => {
     } as unknown as EventTarget;
     expect(editing.playbackShortcut({ key: "z", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, target)).toBe(editing.PlaybackShortcut.RateToggle);
   });
+
+  it("REQ-SEEK-01 maps the page ArrowLeft key to backward seeking", () => {
+    expect(editing.playbackShortcut({ key: "ArrowLeft", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.SeekBackward);
+  });
+
+  it("REQ-SEEK-02 maps the page ArrowRight key to forward seeking", () => {
+    expect(editing.playbackShortcut({ key: "ArrowRight", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.SeekForward);
+  });
+
+  it("REQ-SEEK-03 leaves ArrowRight on timing boundaries for timeline adjustment", () => {
+    const target = {
+      tagName: "BUTTON",
+      getAttribute: (name: string) => name === "data-playback-shortcuts" ? "true" : null,
+    } as unknown as EventTarget;
+    expect(editing.playbackShortcut({ key: "ArrowRight", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, target)).toBeNull();
+  });
 });

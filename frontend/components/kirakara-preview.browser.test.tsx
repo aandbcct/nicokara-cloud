@@ -161,16 +161,14 @@ describe("KirakaraPreview browser behavior", () => {
 
   it("REQ-LIST-01 renders a persistent scrollable lyric list", async () => {
     const { container } = await renderWorkbench("scrollable-lyrics");
-    expect(container.querySelector('[data-kirakara-tab-scroll-area="true"]')?.className).toContain("overflow-y-auto");
+    expect(container.querySelector('[data-lyric-navigator="true"]')?.className).toContain("overflow-y-auto");
   });
 
   it("REQ-LIST-05 hides both lyric scrollbar tracks", async () => {
     const { container } = await renderWorkbench("hidden-lyric-scrollbars");
     const navigator = container.querySelector('[data-lyric-navigator="true"]');
-    const scrollArea = container.querySelector('[data-kirakara-tab-scroll-area="true"]');
-    expect(navigator?.className).not.toContain("overflow-y-auto");
-    expect(scrollArea?.className).toContain("[scrollbar-width:none]");
-    expect(scrollArea?.className).toContain("[&::-webkit-scrollbar]:hidden");
+    expect(navigator?.className).toContain("[scrollbar-width:none]");
+    expect(navigator?.className).toContain("[&::-webkit-scrollbar]:hidden");
   });
 
   it("REQ-LIST-02 places the lyric tabs after the timeline for vertical layouts", async () => {
@@ -197,12 +195,28 @@ describe("KirakaraPreview browser behavior", () => {
   });
 
   it("REQ-LIST-04 scrolls the current playback lyric into view", async () => {
-    const { video } = await renderWorkbench("playback-lyric-scroll");
+    const { video, container } = await renderWorkbench("playback-lyric-scroll");
+    installVideoBehavior(video, false);
+    const navigator = container.querySelector<HTMLElement>('[data-lyric-navigator="true"]');
+    const secondLine = screen.getByRole("button", { name: "2. 明日" });
+    expect(navigator).toBeTruthy();
+    if (!navigator) return;
+    Object.defineProperty(navigator, "clientHeight", { configurable: true, value: 40 });
+    Object.defineProperty(secondLine, "offsetTop", { configurable: true, value: 80 });
+    Object.defineProperty(secondLine, "offsetHeight", { configurable: true, value: 20 });
+    video.currentTime = 3.1;
+    fireEvent.timeUpdate(video);
+    await waitFor(() => expect(navigator.scrollTop).toBe(60));
+  });
+
+  it("REQ-SCROLL-01 does not scroll the page when playback advances", async () => {
+    const { video } = await renderWorkbench("playback-keeps-page-position");
     installVideoBehavior(video, false);
     vi.mocked(Element.prototype.scrollIntoView).mockClear();
     video.currentTime = 3.1;
     fireEvent.timeUpdate(video);
-    await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("button", { name: /2\. 明日/ }).getAttribute("aria-current")).toBe("true"));
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
   });
 
   it("REQ-SELECT-01 seeks a manually selected lyric with preview lead", async () => {
@@ -332,6 +346,22 @@ describe("KirakaraPreview browser behavior", () => {
     expect(screen.getByLabelText("当前视频时间").textContent).toBe("18.800");
   });
 
+  it("REQ-SEEK-04 seeks the video backward from an unfocused page", async () => {
+    const { video } = await renderWorkbench("page-arrow-backward");
+    installVideoBehavior(video);
+    video.currentTime = 5;
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(video.currentTime).toBe(0);
+  });
+
+  it("REQ-SEEK-05 seeks the video forward from an unfocused page", async () => {
+    const { video } = await renderWorkbench("page-arrow-forward");
+    installVideoBehavior(video);
+    video.currentTime = 0;
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(video.currentTime).toBe(5);
+  });
+
   it("REQ-KEY-03 toggles video playback while a timing boundary is focused", async () => {
     const { video } = await renderWorkbench("boundary-space-playback");
     installVideoBehavior(video);
@@ -357,27 +387,6 @@ describe("KirakaraPreview browser behavior", () => {
     expect(screen.getByRole("tab", { name: "滚动歌词" }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByRole("tab", { name: "字幕样式" }));
     expect(screen.getByRole("heading", { name: "字幕样式" })).toBeTruthy();
-  });
-
-  it("REQ-PLACEMENT-04 matches the side panel height to the video surface", async () => {
-    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-      bottom: 360,
-      height: 360,
-      left: 0,
-      right: 640,
-      top: 0,
-      width: 640,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    });
-    try {
-      const { container } = await renderWorkbench("equal-height-side-panel");
-      const controlsPanel = container.querySelector<HTMLElement>('[data-kirakara-controls-panel="true"]');
-      await waitFor(() => expect(controlsPanel?.style.getPropertyValue("--kirakara-preview-height")).toBe("360px"));
-    } finally {
-      rectSpy.mockRestore();
-    }
   });
 
   it("REQ-PLACEMENT-02 orders the timeline before the side tabs in vertical flow", async () => {

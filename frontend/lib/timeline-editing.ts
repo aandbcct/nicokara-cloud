@@ -39,7 +39,11 @@ export enum PlaybackShortcut {
   RateUp = "rate-up",
   RateToggle = "rate-toggle",
   PlayToggle = "play-toggle",
+  SeekBackward = "seek-backward",
+  SeekForward = "seek-forward",
 }
+
+export const PLAYBACK_SEEK_STEP_MS = 5000;
 
 export const PLAYBACK_RATES = Array.from(
   { length: 25 },
@@ -105,7 +109,7 @@ export function playbackShortcut(
   event: Pick<KeyboardEvent, "key" | "repeat" | "ctrlKey" | "metaKey" | "altKey">,
   target: EventTarget | null,
 ): PlaybackShortcut | null {
-  if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return null;
+  if (event.ctrlKey || event.metaKey || event.altKey) return null;
 
   const element = target as (EventTarget & {
     tagName?: string;
@@ -118,6 +122,12 @@ export function playbackShortcut(
     && (element?.isContentEditable || tagName === "input" || tagName === "textarea" || tagName === "select")) {
     return null;
   }
+
+  if (!allowsPlaybackShortcuts && tagName !== "video") {
+    if (event.key === "ArrowLeft") return PlaybackShortcut.SeekBackward;
+    if (event.key === "ArrowRight") return PlaybackShortcut.SeekForward;
+  }
+  if (event.repeat) return null;
 
   const key = event.key.toLowerCase();
   if (key === "x") return PlaybackShortcut.RateDown;
