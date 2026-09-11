@@ -292,6 +292,7 @@ export function KirakaraReviewEditor({
   } | null>(null);
   const timelineTrack = useRef<HTMLDivElement | null>(null);
   const timingDrag = useRef<TimingDrag | null>(null);
+  const moraButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const currentLineIndex = editingLineIndex ?? -1;
   const line = timeline.lines[currentLineIndex];
   const lineStartMs = line?.startMs;
@@ -363,6 +364,7 @@ export function KirakaraReviewEditor({
         Math.max(0, current + direction),
       );
       setSelectedMora({ lineIndex: currentLineIndex, moraIndex });
+      moraButtonRefs.current[moraIndex]?.focus({ preventScroll: true });
     }
     window.addEventListener("keydown", handleMoraShortcut, true);
     return () => window.removeEventListener("keydown", handleMoraShortcut, true);
@@ -742,6 +744,11 @@ export function KirakaraReviewEditor({
                 return (
                   <button
                     key={segment.key}
+                    ref={(element) => {
+                      if (segment.moraIndex !== null) {
+                        moraButtonRefs.current[segment.moraIndex] = element;
+                      }
+                    }}
                     type="button"
                     data-mora-segment={segment.kind === "mora" ? segment.key : undefined}
                     data-unit-segment={segment.kind === "unit" ? segment.key : undefined}

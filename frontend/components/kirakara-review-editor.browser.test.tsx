@@ -228,6 +228,31 @@ describe("KirakaraReviewEditor browser behavior", () => {
     expect(screen.getByText("当前 Mora：きょ")).toBeTruthy();
   });
 
+  it("REQ-MORA-SHORTCUT-04 moves focus so arrows nudge the newly selected Mora", () => {
+    const onChange = vi.fn();
+    const onSeek = vi.fn();
+    renderEditor({ onChange, onSeek });
+    const firstMora = screen.getByRole("button", { name: "きょ" });
+    fireEvent.focus(firstMora);
+    fireEvent.keyDown(firstMora, { key: "]" });
+
+    const secondMora = screen.getByRole("button", { name: "う" });
+    expect(document.activeElement).toBe(secondMora);
+    fireEvent.keyDown(secondMora, { key: "ArrowRight" });
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      lines: expect.arrayContaining([expect.objectContaining({
+        units: expect.arrayContaining([expect.objectContaining({
+          moras: expect.arrayContaining([
+            expect.objectContaining({ reading: "きょ", startMs: 1000 }),
+            expect.objectContaining({ reading: "う", startMs: 1610 }),
+          ]),
+        })]),
+      })]),
+    }));
+    expect(onSeek).toHaveBeenCalledWith(1510);
+  });
+
   it("REQ-MORA-KEY-01 nudges a focused Mora start instead of seeking the video", () => {
     const onChange = vi.fn();
     const onSeek = vi.fn();
