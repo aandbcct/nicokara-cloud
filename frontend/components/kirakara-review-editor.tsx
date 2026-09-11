@@ -2,7 +2,6 @@
 
 import {
   ChevronDown,
-  GripVertical,
   Languages,
   RotateCcw,
   TimerReset,
@@ -74,9 +73,9 @@ type MoraBoundaryMarker = {
 
 const MOUSE_BOUNDARY_GAP_PX = 20;
 const TOUCH_BOUNDARY_GAP_PX = 32;
-const MORA_SEGMENT_TOP_PX = 38;
+const MORA_SEGMENT_TOP_PX = 18;
 const MORA_SEGMENT_HEIGHT_PX = 48;
-const MORA_TRACK_HEIGHT_PX = 96;
+const MORA_TRACK_HEIGHT_PX = 74;
 
 function seconds(milliseconds: number): string {
   return (milliseconds / 1000).toFixed(3);
@@ -489,6 +488,16 @@ export function KirakaraReviewEditor({
     ));
   }
 
+  function adjustLineMove(direction: -1 | 1) {
+    const updated = applyLineOffset(timeline, currentLineIndex, direction * stepMs);
+    onChange(updated);
+    onSeek(previewSeekMs(
+      timingDragPreviewMs(updated, currentLineIndex, { kind: "line-move" }),
+      previewLeadMs,
+      timeline.durationMs,
+    ));
+  }
+
   function moraEdgeTarget(
     segment: TimingSegment & { kind: "mora"; moraIndex: number },
     edge: "start" | "end",
@@ -589,12 +598,12 @@ export function KirakaraReviewEditor({
             </div>
           </div>
 
-          <div className="mt-3 px-2">
+          <div data-timeline-track-wrapper="true" className="mt-3 w-full">
             <div
               ref={timelineTrack}
               data-mora-timeline="true"
               data-boundary-gap-px={minimumBoundaryGapPx}
-              className="relative rounded-sm border-2 border-primary/60 bg-muted/30"
+              className="relative rounded-md border border-border/80 bg-muted/20 shadow-inner shadow-foreground/[0.025]"
               style={{ height: `${MORA_TRACK_HEIGHT_PX}px` }}
               aria-label={`当前歌词行时间轴：${line.text}`}
             >
@@ -605,15 +614,23 @@ export function KirakaraReviewEditor({
                 data-playback-shortcuts="true"
                 title="整句平移"
                 aria-label="整句平移"
-                className="focus-ring absolute inset-x-6 top-0 z-10 flex h-8 touch-none select-none cursor-grab items-center justify-center border-b border-primary/35 text-[11px] font-semibold text-primary active:cursor-grabbing"
+                className="focus-ring group absolute left-1/2 top-0 z-20 flex h-4 w-20 -translate-x-1/2 -translate-y-1/2 touch-none select-none cursor-grab items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-primary focus-visible:text-primary active:cursor-grabbing"
                 onPointerDown={(event) => startTimingDrag(event, { kind: "line-move" })}
                 onPointerMove={moveTimingDrag}
                 onPointerUp={finishTimingDrag}
                 onPointerCancel={(event) => finishTimingDrag(event, true)}
                 onLostPointerCapture={(event) => finishTimingDrag(event, true)}
+                onKeyDown={(event) => {
+                  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                  event.preventDefault();
+                  adjustLineMove(event.key === "ArrowLeft" ? -1 : 1);
+                }}
               >
-                <GripVertical className="mr-1 size-3.5" />
-                整句平移
+                <span className="flex items-center gap-1 rounded-full border border-border/80 bg-background/95 px-2 py-1 shadow-sm transition-colors group-hover:border-primary/40 group-focus-visible:border-primary/50">
+                  <span className="size-1 rounded-full bg-current" />
+                  <span className="size-1 rounded-full bg-current" />
+                  <span className="size-1 rounded-full bg-current" />
+                </span>
               </button>
 
               {(["start", "end"] as const).map((edge) => (
@@ -626,10 +643,10 @@ export function KirakaraReviewEditor({
                   data-playback-shortcuts="true"
                   aria-label={`调整当前歌词行的${edge === "start" ? "开始" : "结束"}时间`}
                   title={edge === "start" ? "整句开始（按比例拉伸）" : "整句结束（按比例拉伸）"}
-                  className={`focus-ring absolute top-0 z-30 flex size-8 touch-none select-none cursor-ew-resize items-center justify-center bg-background/90 text-primary ${
+                  className={`focus-ring group absolute top-0 z-30 flex h-5 w-7 -translate-y-1/2 touch-none select-none cursor-ew-resize items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-primary focus-visible:text-primary ${
                     edge === "start"
-                      ? "left-0 border-r border-primary/50"
-                      : "right-0 border-l border-primary/50"
+                      ? "left-0 -translate-x-1/2"
+                      : "right-0 translate-x-1/2"
                   }`}
                   onPointerDown={(event) => startTimingDrag(event, { kind: "line-edge", edge })}
                   onFocus={() => selectTimingBoundary({ kind: edge === "start" ? "line-start" : "line-end" })}
@@ -648,7 +665,10 @@ export function KirakaraReviewEditor({
                     { kind: edge === "start" ? "line-start" : "line-end" },
                     edge === "start" ? line.startMs : line.endMs,
                   )}
-                  <GripVertical className="size-4" />
+                  <span className="flex items-center gap-0.5 rounded-full border border-border/80 bg-background/95 px-1.5 py-1 shadow-sm transition-colors group-hover:border-primary/40 group-focus-visible:border-primary/50">
+                    <span className="size-1 rounded-full bg-current" />
+                    <span className="size-1 rounded-full bg-current" />
+                  </span>
                 </button>
               ))}
 
@@ -676,14 +696,14 @@ export function KirakaraReviewEditor({
                     data-mora-segment={segment.kind === "mora" ? segment.key : undefined}
                     data-unit-segment={segment.kind === "unit" ? segment.key : undefined}
                     aria-pressed={segment.kind === "mora" ? selected : undefined}
-                    className={`focus-ring absolute flex min-w-px items-center overflow-hidden rounded-[2px] border text-xs font-semibold ${
+                    className={`focus-ring absolute flex min-w-px items-center overflow-hidden rounded-md border text-xs font-semibold shadow-sm transition-[background-color,border-color,box-shadow] ${
                       segment.kind === "unit"
-                        ? "border-border bg-background text-muted-foreground"
+                        ? "border-border/70 bg-background/80 text-muted-foreground"
                         : selected || affected
-                          ? "z-10 border-primary bg-primary/25 text-primary"
+                          ? "z-10 border-primary/55 bg-primary/20 text-primary shadow-primary/10 ring-1 ring-primary/15"
                           : index % 2 === 0
-                            ? "border-border bg-primary/10 text-foreground hover:bg-primary/20"
-                            : "border-border bg-card text-foreground hover:bg-muted"
+                            ? "border-primary/20 bg-primary/10 text-foreground hover:border-primary/35 hover:bg-primary/15"
+                            : "border-border/70 bg-card/90 text-foreground hover:border-primary/25 hover:bg-muted/80"
                     }`}
                     style={{
                       left: `${left}%`,

@@ -196,6 +196,27 @@ describe("KirakaraReviewEditor browser behavior", () => {
     expect(container.querySelector('[data-mora-segment]')?.getAttribute("title")).toContain("选择 Mora");
   });
 
+  it("REQ-OPERATION-02 nudges the focused whole-line move control with arrow keys", () => {
+    const onChange = vi.fn();
+    const onSeek = vi.fn();
+    const { container } = renderEditor({ onChange, onSeek });
+    const moveControl = container.querySelector<HTMLElement>('[data-line-move="true"]');
+
+    fireEvent.keyDown(moveControl!, { key: "ArrowRight" });
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      lines: expect.arrayContaining([expect.objectContaining({ startMs: 1010, endMs: 2010 })]),
+    }));
+    expect(onSeek).toHaveBeenCalledWith(910);
+  });
+
+  it("REQ-STYLE-LAYOUT-02 lets the timeline fill the timing card content width", () => {
+    const { container } = renderEditor();
+    const wrapper = container.querySelector('[data-timeline-track-wrapper="true"]');
+    expect(wrapper?.className).toContain("w-full");
+    expect(wrapper?.className).not.toContain("px-2");
+  });
+
   it("REQ-DENSITY-03 renders a sufficiently spaced boundary as directly draggable", async () => {
     const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 400 } as DOMRect);
     try {
