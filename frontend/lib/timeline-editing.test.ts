@@ -53,3 +53,125 @@ describe("line review playback", () => {
     expect(editing.lineNeedsReview({ ...confident, confidence: 0.4 })).toBe(true);
   });
 });
+
+const playbackLines = [
+  { ...timeline.lines[0], startMs: 1000, endMs: 2000 },
+  { ...timeline.lines[0], text: "b", startMs: 3000, endMs: 4000 },
+];
+
+describe("subtitle playback requirements", () => {
+  it("REQ-FOLLOW-03-A returns null before the first lyric", () => {
+    expect(editing.activeTimelineLineIndex(playbackLines, 999, null)).toBeNull();
+  });
+
+  it("REQ-FOLLOW-03-B keeps the previous lyric in a gap", () => {
+    expect(editing.activeTimelineLineIndex(playbackLines, 2500, 0)).toBe(0);
+  });
+
+  it("REQ-FOLLOW-03-C resolves an earlier lyric after playback moves backward", () => {
+    expect(editing.activeTimelineLineIndex(playbackLines, 1500, 1)).toBe(0);
+  });
+
+  it("REQ-LEAD-03-A clamps a negative preview seek to zero", () => {
+    expect(editing.previewSeekMs(50, 100, 5000)).toBe(0);
+  });
+
+  it("REQ-LEAD-03-B clamps a preview seek to known video duration", () => {
+    expect(editing.previewSeekMs(6000, 100, 5000)).toBe(5000);
+  });
+
+  it("REQ-RATE-09-A exposes a 0.1x minimum playback rate", () => {
+    expect(editing.PLAYBACK_RATES.at(0)).toBe(0.1);
+  });
+
+  it("REQ-RATE-09-B exposes a 2.5x maximum playback rate", () => {
+    expect(editing.PLAYBACK_RATES.at(-1)).toBe(2.5);
+  });
+
+  it("REQ-RATE-10-A clamps playback rate decreases at 0.1x", () => {
+    expect(editing.stepPlaybackRate(0.1, -1)).toBe(0.1);
+  });
+
+  it("REQ-RATE-10-B clamps playback rate increases at 2.5x", () => {
+    expect(editing.stepPlaybackRate(2.5, 1)).toBe(2.5);
+  });
+
+  it("REQ-VIDEO-TIME-02-A formats 18800ms as total seconds", () => {
+    expect(editing.formatPlaybackSeconds(18800)).toBe("18.800");
+  });
+
+  it("REQ-VIDEO-TIME-02-B keeps total seconds beyond one minute", () => {
+    expect(editing.formatPlaybackSeconds(78800)).toBe("78.800");
+  });
+
+  it("REQ-RATE-13 ignores repeated playback shortcuts", () => {
+    expect(editing.playbackShortcut({ key: "x", repeat: true, ctrlKey: false, metaKey: false, altKey: false }, null)).toBeNull();
+  });
+
+  it("REQ-SHORTCUT-01 maps U to the previous lyric by default", () => {
+    expect(editing.playbackShortcut({ key: "u", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.PreviousLine);
+  });
+
+  it("REQ-SHORTCUT-02 maps I to the next lyric by default", () => {
+    expect(editing.playbackShortcut({ key: "i", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.NextLine);
+  });
+
+  it("REQ-SHORTCUT-03 maps O to replaying the current lyric by default", () => {
+    expect(editing.playbackShortcut({ key: "o", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.ReplayLine);
+  });
+
+  it("REQ-SHORTCUT-04 maps P to toggling the current lyric loop by default", () => {
+    expect(editing.playbackShortcut({ key: "p", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.ToggleLineLoop);
+  });
+
+  it("REQ-SHORTCUT-05 resolves a customized playback shortcut", () => {
+    const bindings = { ...editing.DEFAULT_PLAYBACK_SHORTCUT_BINDINGS, [editing.PlaybackShortcut.RateUp]: "v" };
+    expect(editing.playbackShortcut({ key: "v", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null, bindings)).toBe(editing.PlaybackShortcut.RateUp);
+  });
+
+  it("REQ-PLAY-06 resolves Space as a play toggle", () => {
+    expect(editing.playbackShortcut({ key: " ", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.PlayToggle);
+  });
+
+  it("REQ-PLAY-07-A ignores playback shortcuts from input targets", () => {
+    const target = { tagName: "INPUT" } as unknown as EventTarget;
+    expect(editing.playbackShortcut({ key: "c", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, target)).toBeNull();
+  });
+
+  it("REQ-PLAY-07-B leaves Space on native buttons to the browser", () => {
+    const target = { tagName: "BUTTON" } as unknown as EventTarget;
+    expect(editing.playbackShortcut({ key: " ", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, target)).toBeNull();
+  });
+
+  it("REQ-KEY-01 allows Space on an explicitly marked timing target", () => {
+    const target = {
+      tagName: "BUTTON",
+      getAttribute: (name: string) => name === "data-playback-shortcuts" ? "true" : null,
+    } as unknown as EventTarget;
+    expect(editing.playbackShortcut({ key: " ", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, target)).toBe(editing.PlaybackShortcut.PlayToggle);
+  });
+
+  it("REQ-KEY-02 allows rate shortcuts on an explicitly marked timestamp input", () => {
+    const target = {
+      tagName: "INPUT",
+      getAttribute: (name: string) => name === "data-playback-shortcuts" ? "true" : null,
+    } as unknown as EventTarget;
+    expect(editing.playbackShortcut({ key: "z", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, target)).toBe(editing.PlaybackShortcut.RateToggle);
+  });
+
+  it("REQ-SEEK-01 maps the page ArrowLeft key to backward seeking", () => {
+    expect(editing.playbackShortcut({ key: "ArrowLeft", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.SeekBackward);
+  });
+
+  it("REQ-SEEK-02 maps the page ArrowRight key to forward seeking", () => {
+    expect(editing.playbackShortcut({ key: "ArrowRight", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.SeekForward);
+  });
+
+  it("REQ-SEEK-03 leaves ArrowRight on timing boundaries for timeline adjustment", () => {
+    const target = {
+      tagName: "BUTTON",
+      getAttribute: (name: string) => name === "data-playback-shortcuts" ? "true" : null,
+    } as unknown as EventTarget;
+    expect(editing.playbackShortcut({ key: "ArrowRight", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, target)).toBeNull();
+  });
+});

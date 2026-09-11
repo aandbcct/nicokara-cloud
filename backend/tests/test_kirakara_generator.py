@@ -169,8 +169,17 @@ def test_kirakara_generator_maps_browser_style_to_ass_coordinates_and_colors() -
         {
             "font_family": "Yu Gothic",
             "font_size": 72,
+            "font_bold": False,
+            "letter_spacing": 3,
             "ruby_size": 30,
+            "ruby_letter_spacing": 2,
+            "ruby_offset": 8,
             "stroke_width": 6,
+            "stroke_color_before": "#112233",
+            "stroke_color_after": "#aabbcc",
+            "shadow_color": "#445566",
+            "shadow_depth": 4,
+            "horizontal_margin": 96,
             "upper_y": 410,
             "lower_y": 580,
             "color_before": "#fefefe",
@@ -180,11 +189,40 @@ def test_kirakara_generator_maps_browser_style_to_ass_coordinates_and_colors() -
 
     assert config.font_name == "Yu Gothic"
     assert config.base_font_size == 108
+    assert config.base_font_bold is False
+    assert config.base_letter_spacing == 5
     assert config.ruby_font_size == 45
+    assert config.ruby_letter_spacing == 3
+    assert config.ruby_offset == 12
+    assert config.upper_left_x == 144
+    assert config.lower_right_x == 1776
     assert config.upper_y == 615
     assert config.lower_y == 870
     assert config.unsung_color == "&H00FEFEFE"
     assert config.sung_color == "&H00563412"
+    assert config.unsung_outline_color == "&H00332211"
+    assert config.sung_outline_color == "&H00CCBBAA"
+    assert config.shadow_color == "&H00665544"
+    assert config.shadow_depth == 6
+
+
+def test_kirakara_generator_accepts_wider_browser_style_ranges() -> None:
+    config = KirakaraAssConfig.from_browser_style(
+        {
+            "font_size": 32,
+            "ruby_size": 12,
+            "stroke_width": 0,
+            "upper_y": 180,
+            "lower_y": 690,
+        }
+    )
+
+    assert config.base_font_size == 48
+    assert config.ruby_font_size == 18
+    assert config.outline_width == 0
+    assert config.ruby_outline_width == 0
+    assert config.upper_y == 270
+    assert config.lower_y == 1035
 
 
 def test_kirakara_generator_keeps_a_safe_browser_font_name() -> None:
@@ -236,12 +274,12 @@ def test_kirakara_generator_changes_color_one_character_at_a_time() -> None:
     sung_style = next(
         line for line in content.splitlines() if line.startswith("Style: KirakaraSung,")
     )
-    assert "&H00FFFFFF" in progress_style
-    assert "&H00FFFFFF" in sung_style
+    assert "&H00000000" in progress_style
+    assert "&H00000000" in sung_style
 
 
 def test_kirakara_generator_clips_sung_fill_and_outline_continuously() -> None:
-    """Kirakara clips the complete sung layer, including its white outline."""
+    """Kirakara clips the complete sung layer, including its outline."""
     timeline = LyricTimeline(
         confidence=1,
         lines=[
@@ -266,8 +304,8 @@ def test_kirakara_generator_clips_sung_fill_and_outline_continuously() -> None:
     assert r"\clip(" in progress_event
     assert r"\t(0,1000,\clip(" in progress_event
     assert r"\kf" not in progress_event
-    assert "&H00FFFFFF" in progress_style
-    assert ",1,8,0,7," in progress_style
+    assert "&H00000000" in progress_style
+    assert ",14,0,1,8,0,7," in progress_style
 
 
 def test_kirakara_generator_isolates_wide_ruby_and_shifts_following_text(

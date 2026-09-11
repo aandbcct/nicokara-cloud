@@ -75,6 +75,36 @@ describe("Kirakara project compatibility", () => {
     expect(project.slice(lyricStart + 3)).toBe(serializeKirakaraLrc(timeline));
   });
 
+  it("REQ-STYLE-KRL-01 reuses upstream KRL fields and preserves shadow extensions", () => {
+    const project = buildKirakaraProject(timeline, {
+      ...DEFAULT_KIRAKARA_STYLE,
+      fontBold: false,
+      letterSpacing: 3,
+      rubyLetterSpacing: 2,
+      rubyOffset: 7,
+      strokeColorBefore: "#123456",
+      strokeColorAfter: "#abcdef",
+      shadowColor: "#654321",
+      shadowDepth: 4,
+      horizontalMargin: 90,
+    });
+    const lyricStart = project.indexOf("\n\n\n");
+    const config = JSON.parse(project.slice("config ".length, lyricStart));
+
+    expect(config).toMatchObject({
+      fontBold: false,
+      letterSpacing: 3,
+      rubyLetterSpacing: 2,
+      rubyOffset: 7,
+      strokeColorBefore: "#123456",
+      strokeColorAfter: "#abcdef",
+      shadowColor: "#654321",
+      shadowDepth: 4,
+      line1X: 90,
+      line2Right: 90,
+    });
+  });
+
   it("keeps visible paragraph separators at Kirakara timing boundaries", () => {
     const paragraphTimeline: KirakaraTimeline = {
       confidence: 1,

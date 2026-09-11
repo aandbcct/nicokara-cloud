@@ -1,6 +1,6 @@
 "use client";
 
-import { Cloud, Film, FolderOpen, LoaderCircle, RefreshCw } from "lucide-react";
+import { Cloud, Film, FolderOpen, LoaderCircle, RefreshCw, Settings2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { KirakaraDomFrame } from "@/components/kirakara-dom-frame";
@@ -43,17 +43,118 @@ import {
 } from "@/services/api";
 import type { Job } from "@/types/job";
 import {
-  createTimelineHistory, recordTimelineEdit, undoTimelineEdit, redoTimelineEdit,
-  loopPlaybackTime, type PlaybackRange, type TimelineHistory,
+  activeTimelineLineIndex, createTimelineHistory, DEFAULT_PLAYBACK_SHORTCUT_BINDINGS, formatPlaybackSeconds,
+  loopPlaybackTime, playbackShortcut, PLAYBACK_RATES, PLAYBACK_SEEK_STEP_MS, PlaybackShortcut,
+  previewSeekMs, recordTimelineEdit, redoTimelineEdit, stepPlaybackRate,
+  undoTimelineEdit, type PlaybackRange, type PlaybackShortcutBindings, type TimelineHistory,
 } from "@/lib/timeline-editing";
+import {
+  DEFAULT_PREVIEW_LEAD_MS,
+  loadPlaybackShortcutBindings,
+  loadPreviewLeadMs,
+  normalizePlaybackShortcutKey,
+  savePlaybackShortcutBindings,
+  savePreviewLeadMs,
+} from "@/lib/playback-preferences";
 
 const TIMELINE_AUTOSAVE_DELAY_MS = 600;
+export const RATE_NOTICE_DURATION_MS = 1000;
 
 type TimelineSaveState = {
   phase: "idle" | "pending" | "saving" | "saved" | "restored" | "error";
   message?: string;
   refreshRequired?: boolean;
 };
+
+enum WorkbenchSideTab {
+  Lyrics = "lyrics",
+  Style = "style",
+}
+
+const QUICK_LINE_SHORTCUT_SETTINGS = [
+  { shortcut: PlaybackShortcut.PreviousLine, label: "上一句" },
+  { shortcut: PlaybackShortcut.NextLine, label: "下一句" },
+  { shortcut: PlaybackShortcut.ReplayLine, label: "本句重播" },
+  { shortcut: PlaybackShortcut.ToggleLineLoop, label: "本句循环" },
+] as const;
+
+const MORA_SHORTCUT_SETTINGS = [
+  { shortcut: PlaybackShortcut.PreviousMora, label: "上一个 Mora" },
+  { shortcut: PlaybackShortcut.NextMora, label: "下一个 Mora" },
+] as const;
+
+const PLAYBACK_RATE_SHORTCUT_SETTINGS = [
+  { shortcut: PlaybackShortcut.RateToggle, label: "切换常速" },
+  { shortcut: PlaybackShortcut.RateDown, label: "降低倍速" },
+  { shortcut: PlaybackShortcut.RateUp, label: "提高倍速" },
+] as const;
+
+export function scrollLyricWithinNavigator(
+  navigator: Pick<HTMLElement, "getBoundingClientRect" | "scrollTop">,
+  item: Pick<HTMLElement, "getBoundingClientRect">,
+) {
+  const navigatorRect = navigator.getBoundingClientRect();
+  const itemRect = item.getBoundingClientRect();
+  if (itemRect.top < navigatorRect.top) {
+    navigator.scrollTop = Math.max(0, navigator.scrollTop - (navigatorRect.top - itemRect.top));
+  } else if (itemRect.bottom > navigatorRect.bottom) {
+    navigator.scrollTop += itemRect.bottom - navigatorRect.bottom;
+  }
+}
+
+function KirakaraLyricNavigator({
+  timeline,
+  playbackLineIndex,
+  editingLineIndex,
+  onSelect,
+}: {
+  timeline: KirakaraTimeline;
+  playbackLineIndex: number | null;
+  editingLineIndex: number | null;
+  onSelect: (index: number) => void;
+}) {
+  const navigatorRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    if (playbackLineIndex === null) return;
+    const navigator = navigatorRef.current;
+    const item = itemRefs.current[playbackLineIndex];
+    if (navigator && item) scrollLyricWithinNavigator(navigator, item);
+  }, [playbackLineIndex]);
+
+  return (
+    <div
+      ref={navigatorRef}
+      data-lyric-navigator="true"
+      className="max-h-[min(32rem,55vh)] overflow-y-auto rounded-md border [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+    >
+      {timeline.lines.map((line, index) => {
+        const playing = playbackLineIndex === index;
+        const editing = editingLineIndex === index;
+        return (
+          <button
+            key={index}
+            ref={(element) => { itemRefs.current[index] = element; }}
+            type="button"
+            data-lyric-line={index}
+            data-editing-line={editing ? "true" : undefined}
+            aria-label={`${index + 1}. ${line.text}`}
+            aria-current={playing ? "true" : undefined}
+            onClick={() => onSelect(index)}
+            className={`focus-ring flex w-full items-start gap-2 border-b px-3 py-2 text-left text-sm last:border-b-0 ${
+              playing ? "bg-primary/10 text-primary" : "hover:bg-muted"
+            } ${editing ? "font-semibold ring-1 ring-inset ring-primary" : ""}`}
+          >
+            <span className="w-7 shrink-0 text-right tabular-nums text-muted-foreground">{index + 1}.</span>
+            <span className="min-w-0 flex-1">{line.text}</span>
+            {playing && <span className="shrink-0 text-xs" aria-label="当前播放位置">当前</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 type PreviewFrameLoopOptions = {
   draw: () => void;
@@ -96,6 +197,40 @@ export function createPreviewFrameLoop({
   };
 }
 
+export function playbackRateAfterShortcut(
+  shortcut: PlaybackShortcut,
+  currentRate: number,
+  lastNonDefaultRate: number,
+): number {
+  if (shortcut === PlaybackShortcut.RateDown) return stepPlaybackRate(currentRate, -1);
+  if (shortcut === PlaybackShortcut.RateUp) return stepPlaybackRate(currentRate, 1);
+  if (shortcut === PlaybackShortcut.RateToggle) return currentRate === 1 ? lastNonDefaultRate : 1;
+  return currentRate;
+}
+
+export function seekVideoWithoutPlaybackChange(
+  video: Pick<HTMLVideoElement, "currentTime" | "duration">,
+  milliseconds: number,
+): number {
+  const durationMs = Number.isFinite(video.duration) ? video.duration * 1000 : undefined;
+  const targetMs = previewSeekMs(milliseconds, 0, durationMs);
+  video.currentTime = targetMs / 1000;
+  return targetMs;
+}
+
+export function PlaybackRateNotice({ rate }: { rate: number | null }) {
+  if (rate === null) return null;
+  return (
+    <div
+      data-playback-rate-notice="true"
+      aria-live="polite"
+      className="pointer-events-none absolute right-3 top-3 rounded bg-black/70 px-2.5 py-1.5 text-sm font-semibold text-white"
+    >
+      {rate.toFixed(1)}×
+    </div>
+  );
+}
+
 export function KirakaraPreview({
   jobId,
   expectedVideoName,
@@ -126,7 +261,30 @@ export function KirakaraPreview({
   const history = useRef<TimelineHistory | null>(null);
   const [historyAvailability, setHistoryAvailability] = useState({ canUndo: false, canRedo: false });
   const loopRange = useRef<PlaybackRange | null>(null);
+  const [looping, setLooping] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [playbackLineIndex, setPlaybackLineIndex] = useState<number | null>(null);
+  const playbackLineIndexRef = useRef<number | null>(null);
+  const [editingLineIndex, setEditingLineIndex] = useState<number | null>(null);
+  const programmaticSeekLineRef = useRef<number | null>(null);
+  const [playbackMs, setPlaybackMs] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [lastNonDefaultRate, setLastNonDefaultRate] = useState(0.9);
+  const [rateNotice, setRateNotice] = useState<number | null>(null);
+  const [sideTab, setSideTab] = useState(WorkbenchSideTab.Lyrics);
+  const rateNoticeTimer = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
+  const [previewLeadMs, setPreviewLeadMs] = useState(() =>
+    typeof window === "undefined"
+      ? DEFAULT_PREVIEW_LEAD_MS
+      : loadPreviewLeadMs(window.localStorage),
+  );
+  const [shortcutBindings, setShortcutBindings] = useState<PlaybackShortcutBindings>(() =>
+    typeof window === "undefined"
+      ? { ...DEFAULT_PLAYBACK_SHORTCUT_BINDINGS }
+      : loadPlaybackShortcutBindings(window.localStorage),
+  );
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
   const [frame, setFrame] = useState<KirakaraFrame | null>(null);
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [autosaveTrigger, setAutosaveTrigger] = useState<{
@@ -164,7 +322,21 @@ export function KirakaraPreview({
     savedAtRef.current = null;
     history.current = null;
     loopRange.current = null;
+    playbackLineIndexRef.current = null;
+    programmaticSeekLineRef.current = null;
+    globalThis.queueMicrotask(() => {
+      if (activeJobId.current !== jobId) return;
+      setPlaybackLineIndex(null);
+      setEditingLineIndex(null);
+      setLooping(false);
+      setPlaybackMs(0);
+      setIsPlaying(false);
+    });
   }, [jobId]);
+
+  useEffect(() => () => {
+    if (rateNoticeTimer.current !== null) globalThis.clearTimeout(rateNoticeTimer.current);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -343,12 +515,29 @@ export function KirakaraPreview({
     if (!videoElement) return;
     const loopTime = loopPlaybackTime(loopRange.current, videoElement.currentTime, videoElement.duration, !videoElement.paused);
     if (loopTime !== null) videoElement.currentTime = loopTime;
+    const currentMs = Math.max(0, Math.round(videoElement.currentTime * 1000));
+    setPlaybackMs((previous) => previous === currentMs ? previous : currentMs);
+    if (timeline) {
+      const protectedIndex = programmaticSeekLineRef.current;
+      const protectedLine = protectedIndex === null ? undefined : timeline.lines[protectedIndex];
+      const insidePreviewLead = protectedLine !== undefined
+        && currentMs >= previewSeekMs(protectedLine.startMs, previewLeadMs, timeline.durationMs)
+        && currentMs < protectedLine.startMs;
+      if (!insidePreviewLead) programmaticSeekLineRef.current = null;
+      const nextIndex = insidePreviewLead
+        ? protectedIndex
+        : activeTimelineLineIndex(timeline.lines, currentMs, playbackLineIndexRef.current);
+      if (nextIndex !== playbackLineIndexRef.current) {
+        playbackLineIndexRef.current = nextIndex;
+        setPlaybackLineIndex(nextIndex);
+      }
+    }
     setFrame(
       timeline
-        ? activeKirakaraFrame(timeline, videoElement.currentTime * 1000)
+        ? activeKirakaraFrame(timeline, currentMs)
         : null,
     );
-  }, [timeline]);
+  }, [previewLeadMs, timeline]);
 
   useEffect(() => {
     frameLoop.current ??= createPreviewFrameLoop({
@@ -362,6 +551,88 @@ export function KirakaraPreview({
     setStyle(nextStyle);
     saveKirakaraStyle(window.localStorage, nextStyle);
   }
+
+  const changePlaybackRate = useCallback((nextRate: number) => {
+    const normalized = Math.min(2.5, Math.max(0.1, Math.round(nextRate * 10) / 10));
+    if (normalized === playbackRate) return;
+    const element = videoRef.current;
+    if (element) element.playbackRate = normalized;
+    setPlaybackRate(normalized);
+    if (normalized !== 1) setLastNonDefaultRate(normalized);
+    setRateNotice(normalized);
+    if (rateNoticeTimer.current !== null) globalThis.clearTimeout(rateNoticeTimer.current);
+    rateNoticeTimer.current = globalThis.setTimeout(() => setRateNotice(null), RATE_NOTICE_DURATION_MS);
+  }, [playbackRate]);
+
+  const selectEditingLine = useCallback((index: number) => {
+    const selectedLine = timeline?.lines[index];
+    if (!selectedLine) return;
+    setEditingLineIndex(index);
+    programmaticSeekLineRef.current = index;
+    const element = videoRef.current;
+    if (element) {
+      seekVideoWithoutPlaybackChange(
+        element,
+        previewSeekMs(selectedLine.startMs, previewLeadMs, timeline.durationMs),
+      );
+      updateFrame();
+      element.focus({ preventScroll: true });
+    }
+  }, [previewLeadMs, timeline, updateFrame]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const shortcut = playbackShortcut(event, event.target, shortcutBindings);
+      if (shortcut === null) return;
+      event.preventDefault();
+      if (shortcut === PlaybackShortcut.SeekBackward || shortcut === PlaybackShortcut.SeekForward) {
+        const element = videoRef.current;
+        if (!element) return;
+        const direction = shortcut === PlaybackShortcut.SeekBackward ? -1 : 1;
+        seekVideoWithoutPlaybackChange(
+          element,
+          Math.round(element.currentTime * 1000) + direction * PLAYBACK_SEEK_STEP_MS,
+        );
+        updateFrame();
+      } else if (shortcut === PlaybackShortcut.PreviousLine || shortcut === PlaybackShortcut.NextLine) {
+        const currentIndex = editingLineIndex ?? playbackLineIndexRef.current;
+        if (currentIndex === null || !timeline) return;
+        const direction = shortcut === PlaybackShortcut.PreviousLine ? -1 : 1;
+        const nextIndex = currentIndex + direction;
+        if (nextIndex < 0 || nextIndex >= timeline.lines.length) return;
+        selectEditingLine(nextIndex);
+      } else if (shortcut === PlaybackShortcut.ReplayLine) {
+        const currentIndex = editingLineIndex ?? playbackLineIndexRef.current;
+        const currentLine = currentIndex === null ? undefined : timeline?.lines[currentIndex];
+        const element = videoRef.current;
+        if (currentIndex === null || !currentLine || !element) return;
+        setEditingLineIndex(currentIndex);
+        programmaticSeekLineRef.current = currentIndex;
+        seekVideoWithoutPlaybackChange(element, currentLine.startMs);
+        updateFrame();
+        element.focus({ preventScroll: true });
+      } else if (shortcut === PlaybackShortcut.ToggleLineLoop) {
+        const currentIndex = editingLineIndex ?? playbackLineIndexRef.current;
+        if (currentIndex === null || !timeline?.lines[currentIndex]) return;
+        setEditingLineIndex(currentIndex);
+        setLooping((current) => !current);
+      } else if (shortcut === PlaybackShortcut.PreviousMora || shortcut === PlaybackShortcut.NextMora) {
+        return;
+      } else if (shortcut !== PlaybackShortcut.PlayToggle) {
+        changePlaybackRate(playbackRateAfterShortcut(shortcut, playbackRate, lastNonDefaultRate));
+      } else {
+        const element = videoRef.current;
+        if (!element) return;
+        if (element.paused) {
+          void element.play().catch(() => setPlaybackError("播放未能开始，请使用视频控件重试。"));
+        } else {
+          element.pause();
+        }
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [changePlaybackRate, editingLineIndex, lastNonDefaultRate, playbackRate, selectEditingLine, shortcutBindings, timeline, updateFrame]);
 
   function saveTimelineChange(nextTimeline: KirakaraTimeline) {
     setHistoryAvailability({ canUndo: Boolean(history.current?.past.length), canRedo: Boolean(history.current?.future.length) });
@@ -391,15 +662,8 @@ export function KirakaraPreview({
     if (!range || !element) return;
     if (Number.isFinite(element.duration) && range.startMs >= element.duration * 1000) {
       setPlaybackError("当前句超出视频时长");
-      return;
     }
-    element.currentTime = range.startMs / 1000;
-    void element.play().catch(() => setPlaybackError("试听未能开始，请在视频上点击播放。"));
   }, []);
-
-  function continueLoop() {
-    if (loopRange.current) loopLine(loopRange.current);
-  }
 
   function retryTimelineSave() {
     if (!timeline) return;
@@ -433,8 +697,46 @@ export function KirakaraPreview({
   function seekPreview(milliseconds: number) {
     const element = videoRef.current;
     if (!element) return;
-    element.currentTime = milliseconds / 1000;
+    programmaticSeekLineRef.current = editingLineIndex;
+    seekVideoWithoutPlaybackChange(element, milliseconds);
     updateFrame();
+  }
+
+  function locatePlaybackLine() {
+    if (playbackLineIndex === null) return;
+    setEditingLineIndex(playbackLineIndex);
+  }
+
+  function updatePreviewLead(value: string | number | null) {
+    const normalized = savePreviewLeadMs(window.localStorage, value);
+    setPreviewLeadMs(normalized);
+  }
+
+  function updateShortcut(shortcut: keyof PlaybackShortcutBindings, value: string) {
+    const key = normalizePlaybackShortcutKey(value);
+    if (key === null) {
+      setShortcutError("快捷键仅支持单个英文字母、数字或方括号");
+      return;
+    }
+    const duplicate = Object.entries(shortcutBindings).find(
+      ([configuredShortcut, configuredKey]) => configuredShortcut !== shortcut && configuredKey === key,
+    );
+    if (duplicate) {
+      setShortcutError(`快捷键 ${key.toUpperCase()} 已被其他操作使用`);
+      return;
+    }
+    const nextBindings = savePlaybackShortcutBindings(window.localStorage, {
+      ...shortcutBindings,
+      [shortcut]: key,
+    });
+    setShortcutBindings(nextBindings);
+    setShortcutError(null);
+  }
+
+  function resetShortcuts() {
+    const defaults = savePlaybackShortcutBindings(window.localStorage, DEFAULT_PLAYBACK_SHORTCUT_BINDINGS);
+    setShortcutBindings(defaults);
+    setShortcutError(null);
   }
 
   return (
@@ -471,39 +773,87 @@ export function KirakaraPreview({
       ) : (
         <div
           data-kirakara-workbench="desktop-fit"
-          className="mt-4 grid items-start gap-3 lg:grid-cols-[minmax(0,1.05fr)_minmax(20rem,1fr)] xl:grid-cols-[minmax(0,1.05fr)_minmax(22rem,1fr)]"
+          className="mt-4 grid items-start gap-3 lg:grid-cols-[minmax(18rem,0.7fr)_minmax(0,1.55fr)] xl:grid-cols-[minmax(20rem,0.65fr)_minmax(0,1.65fr)]"
         >
           <div
             data-kirakara-preview-panel="true"
-            className="min-w-0 lg:col-start-1 lg:row-start-1"
+            className="min-w-0 lg:col-span-2 lg:row-start-1"
           >
-            <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black">
+            <div
+              data-kirakara-preview-surface="true"
+              className="relative aspect-video w-full overflow-hidden rounded-lg bg-black"
+            >
               {videoUrl && (
                 <video
                   ref={assignVideoElement}
                   src={videoUrl}
                   controls
+                  tabIndex={0}
                   playsInline
                   preload="metadata"
                   className="size-full object-contain"
-                  onLoadedMetadata={updateFrame}
+                  onLoadedMetadata={(event) => {
+                    event.currentTarget.playbackRate = playbackRate;
+                    updateFrame();
+                  }}
                   onTimeUpdate={updateFrame}
                   onSeeked={updateFrame}
-                  onPlay={startDrawing}
-                  onEnded={continueLoop}
+                  onPlay={() => {
+                    setIsPlaying(true);
+                    startDrawing();
+                  }}
+                  onEnded={() => {
+                    setIsPlaying(false);
+                    stopDrawing();
+                    updateFrame();
+                  }}
                   onPause={() => {
+                    setIsPlaying(false);
                     stopDrawing();
                     updateFrame();
                   }}
                 />
               )}
               <KirakaraDomFrame frame={frame} style={style} />
+              <PlaybackRateNotice rate={rateNotice} />
               {!timeline && !timelineError && (
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 bg-black/45 text-sm text-white">
                   <LoaderCircle className="size-4 animate-spin" />
                   正在读取时间轴
                 </div>
               )}
+            </div>
+            <div data-playback-controls="true" className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+              <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                播放倍速
+                <select
+                  aria-label="播放倍速"
+                  value={playbackRate}
+                  onChange={(event) => changePlaybackRate(Number(event.target.value))}
+                  className="focus-ring h-9 rounded-md border bg-background px-2 text-sm text-foreground"
+                >
+                  {PLAYBACK_RATES.map((rate) => (
+                    <option key={rate} value={rate}>{rate.toFixed(1)}×</option>
+                  ))}
+                </select>
+              </label>
+              <output
+                data-current-video-time="true"
+                aria-label="当前视频时间"
+                className="font-mono tabular-nums text-foreground"
+              >
+                {formatPlaybackSeconds(playbackMs)}
+              </output>
+              <button
+                type="button"
+                data-locate-playback-line="true"
+                disabled={playbackLineIndex === null}
+                onClick={locatePlaybackLine}
+                className="focus-ring h-9 rounded-md border px-3 text-xs font-semibold hover:bg-muted disabled:opacity-40"
+              >
+                定位歌词
+              </button>
+              <span className="sr-only" data-playing={isPlaying}>播放状态</span>
             </div>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
               <span>
@@ -525,7 +875,7 @@ export function KirakaraPreview({
 
           <div
             data-kirakara-timeline-panel="true"
-            className={`min-w-0 lg:col-span-2 lg:row-start-2 ${
+            className={`min-w-0 lg:col-start-2 lg:row-start-2 ${
               timeline
                 ? "rounded-lg border bg-background/40 p-3"
                 : "hidden"
@@ -571,14 +921,88 @@ export function KirakaraPreview({
                 <KirakaraReviewEditor
                   key={jobId}
                   timeline={timeline}
+                  editingLineIndex={editingLineIndex}
+                  previewLeadMs={previewLeadMs}
+                  shortcutBindings={shortcutBindings}
+                  onEditingLineChange={selectEditingLine}
                   onChange={updateTimeline}
                   onSeek={seekPreview}
                   canUndo={historyAvailability.canUndo}
                   canRedo={historyAvailability.canRedo}
                   onUndo={() => navigateHistory("undo")}
                   onRedo={() => navigateHistory("redo")}
+                  looping={looping}
+                  onLoopChange={setLooping}
                   onLoop={loopLine}
                 />
+                <details data-timing-settings="true" className="mt-4 rounded-md border bg-background/60">
+                  <summary className="focus-ring flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+                    <Settings2 className="size-4" />
+                    调轴设置
+                  </summary>
+                  <div className="space-y-3 border-t p-3">
+                    <label className="block text-xs font-medium text-muted-foreground">
+                      复听提前量（ms）
+                      <input
+                        type="number"
+                        min="0"
+                        max="2000"
+                        step="1"
+                        value={previewLeadMs}
+                        onChange={(event) => updatePreviewLead(event.target.value)}
+                        className="focus-ring mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => updatePreviewLead(DEFAULT_PREVIEW_LEAD_MS)}
+                      className="focus-ring rounded-md border px-3 py-2 text-xs font-semibold hover:bg-muted"
+                    >
+                      恢复默认值
+                    </button>
+                    <div className="grid gap-4 border-t pt-3 sm:grid-cols-2">
+                      {[
+                        { title: "快速定位", settings: QUICK_LINE_SHORTCUT_SETTINGS },
+                        { title: "Mora 选择", settings: MORA_SHORTCUT_SETTINGS },
+                        { title: "播放倍速", settings: PLAYBACK_RATE_SHORTCUT_SETTINGS },
+                      ].map((group) => (
+                        <fieldset key={group.title} className="min-w-0">
+                          <legend className="text-xs font-bold text-foreground">{group.title}</legend>
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            {group.settings.map(({ shortcut, label }) => (
+                              <label key={shortcut} className="text-xs font-medium text-muted-foreground">
+                                {label}
+                                <input
+                                  aria-label={`快捷键：${label}`}
+                                  value={shortcutBindings[shortcut].toUpperCase()}
+                                  readOnly
+                                  onKeyDown={(event) => {
+                                    event.preventDefault();
+                                    if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+                                    updateShortcut(shortcut, event.key);
+                                  }}
+                                  className="focus-ring mt-1 block h-9 w-full cursor-pointer rounded-md border bg-background px-3 text-center text-sm font-bold uppercase text-foreground"
+                                />
+                              </label>
+                            ))}
+                          </div>
+                        </fieldset>
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs leading-5 text-muted-foreground">点击快捷键输入框，再按一个字母、数字或方括号即可替换。</p>
+                      <button
+                        type="button"
+                        onClick={resetShortcuts}
+                        className="focus-ring rounded-md border px-3 py-2 text-xs font-semibold hover:bg-muted"
+                      >
+                        恢复快捷键默认值
+                      </button>
+                    </div>
+                    {shortcutError && <p role="alert" className="text-xs text-destructive">{shortcutError}</p>}
+                    <p className="text-xs leading-5 text-muted-foreground">方向键微调边界；空格播放或暂停。快捷键在文本输入和下拉框中不会触发。</p>
+                  </div>
+                </details>
                 {playbackError && <p role="alert" className="mt-2 text-sm text-destructive">{playbackError}</p>}
               </>
             )}
@@ -586,7 +1010,7 @@ export function KirakaraPreview({
 
           <div
             data-kirakara-controls-panel="true"
-            className={`min-w-0 lg:col-start-2 lg:row-start-1 ${
+            className={`min-w-0 lg:col-start-1 lg:row-start-2 ${
               timeline
                 ? "rounded-lg border bg-background/40 p-3"
                 : "hidden"
@@ -594,30 +1018,82 @@ export function KirakaraPreview({
           >
             {timeline && (
               <div className="min-w-0">
-                <KirakaraStyleEditor style={style} onChange={updateStyle} />
+                <div role="tablist" aria-label="歌词与字幕样式" className="mb-3 grid grid-cols-2 rounded-md border bg-muted/30 p-1">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={sideTab === WorkbenchSideTab.Lyrics}
+                    onClick={() => setSideTab(WorkbenchSideTab.Lyrics)}
+                    className={`focus-ring rounded px-3 py-2 text-sm font-semibold ${sideTab === WorkbenchSideTab.Lyrics ? "bg-background shadow-sm" : "text-muted-foreground"}`}
+                  >
+                    滚动歌词
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={sideTab === WorkbenchSideTab.Style}
+                    onClick={() => setSideTab(WorkbenchSideTab.Style)}
+                    className={`focus-ring rounded px-3 py-2 text-sm font-semibold ${sideTab === WorkbenchSideTab.Style ? "bg-background shadow-sm" : "text-muted-foreground"}`}
+                  >
+                    字幕样式
+                  </button>
+                </div>
+                <div
+                  data-kirakara-tab-scroll-area="true"
+                  className="min-w-0"
+                >
+                  {sideTab === WorkbenchSideTab.Lyrics ? (
+                    <KirakaraLyricNavigator
+                      timeline={timeline}
+                      playbackLineIndex={playbackLineIndex}
+                      editingLineIndex={editingLineIndex}
+                      onSelect={selectEditingLine}
+                    />
+                  ) : (
+                    <KirakaraStyleEditor style={style} onChange={updateStyle} />
+                  )}
+                </div>
               </div>
             )}
-            {timeline && capabilities && (
-              <div className="mt-4 min-w-0 space-y-3 border-t pt-4 [&>div]:mt-0 [&>div]:border-t-0 [&>div]:pt-0">
+          </div>
+
+          <section
+            data-kirakara-export-panel="true"
+            aria-labelledby="kirakara-export-heading"
+            className={`min-w-0 lg:col-span-2 lg:row-start-3 ${
+              timeline
+                ? "rounded-lg border bg-background/40 p-3"
+                : "hidden"
+            }`}
+          >
+            {timeline && (
+              <>
+                <h3 id="kirakara-export-heading" className="mb-3 text-base font-bold">导出</h3>
+                <div className="min-w-0 space-y-3 [&>div]:mt-0 [&>div]:border-t-0 [&>div]:pt-0">
                 <ReviewedDataDownloads
                   jobId={jobId}
                   videoName={expectedVideoName}
                   timeline={timeline}
                   style={style}
                 />
-                <KirakaraRenderActions
-                  capabilities={capabilities}
-                  video={video}
-                  timeline={timeline}
-                  style={style}
-                  jobId={jobId}
-                  vocalMode={vocalMode}
-                  rerender={hasCloudResult}
-                  onCloudRenderQueued={onCloudRenderQueued}
-                />
-              </div>
+                  {capabilities ? (
+                    <KirakaraRenderActions
+                      capabilities={capabilities}
+                      video={video}
+                      timeline={timeline}
+                      style={style}
+                      jobId={jobId}
+                      vocalMode={vocalMode}
+                      rerender={hasCloudResult}
+                      onCloudRenderQueued={onCloudRenderQueued}
+                    />
+                  ) : (
+                    <p className="text-xs text-muted-foreground">正在检查可用的导出方式…</p>
+                  )}
+                </div>
+              </>
             )}
-          </div>
+          </section>
         </div>
       )}
 

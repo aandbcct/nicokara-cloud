@@ -59,6 +59,7 @@ class KirakaraAssConfig:
     play_res_y: int = 1080
     font_name: str = "Noto Sans CJK JP"
     base_font_size: int = 96
+    base_font_bold: bool = True
     ruby_font_size: int = 39
     upper_left_x: int = 192
     upper_y: int = 645
@@ -78,8 +79,12 @@ class KirakaraAssConfig:
     ruby_offset: int = 6
     sung_color: str = "&H000000A5"
     unsung_color: str = "&H00FFFFFF"
+    unsung_outline_color: str = "&H00000000"
+    sung_outline_color: str = "&H00FFFFFF"
     outline_width: int = 8
     ruby_outline_width: int = 6
+    shadow_color: str = "&H00000000"
+    shadow_depth: int = 0
     base_letter_spacing: int = 14
     ruby_letter_spacing: int = 8
 
@@ -106,6 +111,10 @@ class KirakaraAssConfig:
                 return default
             return f"&H00{blue}{green}{red}".upper()
 
+        def boolean(key: str, default: bool) -> bool:
+            raw = value.get(key)
+            return raw if isinstance(raw, bool) else default
+
         font_name = str(value.get("font_family") or cls.font_name).strip()
         if (
             len(font_name) >= 2
@@ -123,19 +132,36 @@ class KirakaraAssConfig:
             # JavaScript Math.round semantics used by the browser renderer.
             return int(float(number) * 1.5 + 0.5)
 
-        font_size = number("font_size", 64, 48, 80)
-        ruby_size = number("ruby_size", 26, 18, 38)
-        stroke_width = number("stroke_width", 5, 2, 8)
+        font_size = number("font_size", 64, 24, 120)
+        ruby_size = number("ruby_size", 26, 10, 60)
+        stroke_width = number("stroke_width", 5, 0, 12)
+        horizontal_margin = scaled(number("horizontal_margin", 128, 0, 320))
         return cls(
             font_name=font_name,
+            base_font_bold=boolean("font_bold", True),
             base_font_size=scaled(font_size),
             ruby_font_size=scaled(ruby_size),
-            upper_y=scaled(number("upper_y", 430, 320, 560)),
-            lower_y=scaled(number("lower_y", 563, 440, 680)),
+            upper_left_x=horizontal_margin,
+            upper_y=scaled(number("upper_y", 430, 120, 600)),
+            lower_right_x=cls.play_res_x - horizontal_margin,
+            lower_y=scaled(number("lower_y", 563, 240, 700)),
+            ruby_offset=scaled(number("ruby_offset", 4, 0, 32)),
             sung_color=ass_color("color_after", cls.sung_color),
             unsung_color=ass_color("color_before", cls.unsung_color),
+            unsung_outline_color=ass_color(
+                "stroke_color_before", cls.unsung_outline_color
+            ),
+            sung_outline_color=ass_color(
+                "stroke_color_after", cls.sung_outline_color
+            ),
             outline_width=scaled(stroke_width),
-            ruby_outline_width=max(1, scaled(stroke_width * 0.8)),
+            ruby_outline_width=scaled(stroke_width * 0.8),
+            shadow_color=ass_color("shadow_color", cls.shadow_color),
+            shadow_depth=scaled(number("shadow_depth", 0, 0, 12)),
+            base_letter_spacing=scaled(number("letter_spacing", 9, -4, 32)),
+            ruby_letter_spacing=scaled(
+                number("ruby_letter_spacing", 5, -2, 20)
+            ),
         )
 
 
@@ -337,7 +363,7 @@ class KirakaraAssGenerator:
         base_measure = text_measurer(
             self.config.font_name,
             self.config.base_font_size,
-            bold=True,
+            bold=self.config.base_font_bold,
         )
         ruby_measure = text_measurer(
             self.config.font_name,
@@ -346,7 +372,7 @@ class KirakaraAssGenerator:
         base_ink_measure = text_ink_measurer(
             self.config.font_name,
             self.config.base_font_size,
-            bold=True,
+            bold=self.config.base_font_bold,
         )
         ruby_ink_measure = text_ink_measurer(
             self.config.font_name,
@@ -753,6 +779,7 @@ class KirakaraAssGenerator:
 
     def _header(self) -> str:
         config = self.config
+        base_bold = -1 if config.base_font_bold else 0
         return f"""[Script Info]
 Title: Nicokara Kirakara Render
 ScriptType: v4.00+
@@ -765,12 +792,12 @@ PlayResY: {config.play_res_y}
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: KirakaraIndicator,Arial,10,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,{config.indicator_stroke_width},0,7,0,0,0,1
-Style: KirakaraBase,{config.font_name},{config.base_font_size},{config.unsung_color},{config.unsung_color},&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,{config.outline_width},0,7,0,0,0,1
-Style: KirakaraRuby,{config.font_name},{config.ruby_font_size},{config.unsung_color},{config.unsung_color},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,{config.ruby_outline_width},0,7,0,0,0,1
-Style: KirakaraProgress,{config.font_name},{config.base_font_size},{config.sung_color},{config.sung_color},&H00FFFFFF,&H00000000,-1,0,0,0,100,100,0,0,1,{config.outline_width},0,7,0,0,0,1
-Style: KirakaraRubyProgress,{config.font_name},{config.ruby_font_size},{config.sung_color},{config.sung_color},&H00FFFFFF,&H00000000,0,0,0,0,100,100,0,0,1,{config.ruby_outline_width},0,7,0,0,0,1
-Style: KirakaraSung,{config.font_name},{config.base_font_size},{config.sung_color},{config.sung_color},&H00FFFFFF,&H00000000,-1,0,0,0,100,100,0,0,1,{config.outline_width},0,7,0,0,0,1
-Style: KirakaraRubySung,{config.font_name},{config.ruby_font_size},{config.sung_color},{config.sung_color},&H00FFFFFF,&H00000000,0,0,0,0,100,100,0,0,1,{config.ruby_outline_width},0,7,0,0,0,1
+Style: KirakaraBase,{config.font_name},{config.base_font_size},{config.unsung_color},{config.unsung_color},{config.unsung_outline_color},{config.shadow_color},{base_bold},0,0,0,100,100,{config.base_letter_spacing},0,1,{config.outline_width},{config.shadow_depth},7,0,0,0,1
+Style: KirakaraRuby,{config.font_name},{config.ruby_font_size},{config.unsung_color},{config.unsung_color},{config.unsung_outline_color},{config.shadow_color},0,0,0,0,100,100,{config.ruby_letter_spacing},0,1,{config.ruby_outline_width},{config.shadow_depth},7,0,0,0,1
+Style: KirakaraProgress,{config.font_name},{config.base_font_size},{config.sung_color},{config.sung_color},{config.sung_outline_color},{config.shadow_color},{base_bold},0,0,0,100,100,{config.base_letter_spacing},0,1,{config.outline_width},{config.shadow_depth},7,0,0,0,1
+Style: KirakaraRubyProgress,{config.font_name},{config.ruby_font_size},{config.sung_color},{config.sung_color},{config.sung_outline_color},{config.shadow_color},0,0,0,0,100,100,{config.ruby_letter_spacing},0,1,{config.ruby_outline_width},{config.shadow_depth},7,0,0,0,1
+Style: KirakaraSung,{config.font_name},{config.base_font_size},{config.sung_color},{config.sung_color},{config.sung_outline_color},{config.shadow_color},{base_bold},0,0,0,100,100,{config.base_letter_spacing},0,1,{config.outline_width},{config.shadow_depth},7,0,0,0,1
+Style: KirakaraRubySung,{config.font_name},{config.ruby_font_size},{config.sung_color},{config.sung_color},{config.sung_outline_color},{config.shadow_color},0,0,0,0,100,100,{config.ruby_letter_spacing},0,1,{config.ruby_outline_width},{config.shadow_depth},7,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"""
