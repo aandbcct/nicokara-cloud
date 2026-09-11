@@ -65,15 +65,17 @@ type TimingDrag = {
   moved: boolean;
 };
 
-type TimingSegment = {
+type TimingSegmentBase = {
   key: string;
-  kind: "mora" | "unit";
   label: string;
   startMs: number;
   endMs: number;
-  moraIndex: number | null;
-  boundaryIndex: number | null;
 };
+
+type TimingSegment = TimingSegmentBase & (
+  | { kind: "mora"; moraIndex: number; boundaryIndex: number | null }
+  | { kind: "unit"; moraIndex: null; boundaryIndex: null }
+);
 
 type MoraBoundaryMarker = {
   boundaryIndex: number;
@@ -743,6 +745,7 @@ export function KirakaraReviewEditor({
                     type="button"
                     data-mora-segment={segment.kind === "mora" ? segment.key : undefined}
                     data-unit-segment={segment.kind === "unit" ? segment.key : undefined}
+                    data-playback-shortcuts={segment.kind === "mora" ? "true" : undefined}
                     aria-pressed={segment.kind === "mora" ? selected : undefined}
                     className={`focus-ring absolute flex min-w-px items-center overflow-hidden border text-xs font-semibold ${
                       segment.kind === "unit"
@@ -766,6 +769,21 @@ export function KirakaraReviewEditor({
                       if (segment.moraIndex !== null) {
                         setSelectedMora({ lineIndex: currentLineIndex, moraIndex: segment.moraIndex });
                       }
+                    }}
+                    onFocus={() => {
+                      if (segment.moraIndex !== null) {
+                        setSelectedMora({ lineIndex: currentLineIndex, moraIndex: segment.moraIndex });
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (segment.kind !== "mora" || segment.moraIndex === null) return;
+                      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                      event.preventDefault();
+                      changeMoraEdge(
+                        segment,
+                        "start",
+                        segment.startMs + (event.key === "ArrowLeft" ? -stepMs : stepMs),
+                      );
                     }}
                   >
                     <span className="block w-full truncate px-1.5 text-center">

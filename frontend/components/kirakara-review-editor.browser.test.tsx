@@ -228,6 +228,27 @@ describe("KirakaraReviewEditor browser behavior", () => {
     expect(screen.getByText("当前 Mora：きょ")).toBeTruthy();
   });
 
+  it("REQ-MORA-KEY-01 nudges a focused Mora start instead of seeking the video", () => {
+    const onChange = vi.fn();
+    const onSeek = vi.fn();
+    renderEditor({ onChange, onSeek });
+    const mora = screen.getByRole("button", { name: "う" });
+    fireEvent.focus(mora);
+    fireEvent.keyDown(mora, { key: "ArrowRight" });
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      lines: expect.arrayContaining([expect.objectContaining({
+        units: expect.arrayContaining([expect.objectContaining({
+          moras: expect.arrayContaining([expect.objectContaining({
+            reading: "う",
+            startMs: 1610,
+          })]),
+        })]),
+      })]),
+    }));
+    expect(onSeek).toHaveBeenCalledWith(1510);
+  });
+
   it("REQ-TIME-07 uses a smaller mouse hit area than the density threshold", () => {
     const { container } = renderEditor();
     fireEvent.click(screen.getByRole("button", { name: "きょ" }));
