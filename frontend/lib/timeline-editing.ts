@@ -35,6 +35,10 @@ export function redoTimelineEdit(history: TimelineHistory): TimelineHistory {
 export type PlaybackRange = { startMs: number; endMs: number };
 
 export enum PlaybackShortcut {
+  PreviousLine = "previous-line",
+  NextLine = "next-line",
+  ReplayLine = "replay-line",
+  ToggleLineLoop = "toggle-line-loop",
   RateDown = "rate-down",
   RateUp = "rate-up",
   RateToggle = "rate-toggle",
@@ -42,6 +46,27 @@ export enum PlaybackShortcut {
   SeekBackward = "seek-backward",
   SeekForward = "seek-forward",
 }
+
+export type PlaybackShortcutBindings = Record<
+  PlaybackShortcut.PreviousLine
+  | PlaybackShortcut.NextLine
+  | PlaybackShortcut.ReplayLine
+  | PlaybackShortcut.ToggleLineLoop
+  | PlaybackShortcut.RateDown
+  | PlaybackShortcut.RateUp
+  | PlaybackShortcut.RateToggle,
+  string
+>;
+
+export const DEFAULT_PLAYBACK_SHORTCUT_BINDINGS: PlaybackShortcutBindings = {
+  [PlaybackShortcut.PreviousLine]: "u",
+  [PlaybackShortcut.NextLine]: "i",
+  [PlaybackShortcut.ReplayLine]: "o",
+  [PlaybackShortcut.ToggleLineLoop]: "p",
+  [PlaybackShortcut.RateToggle]: "z",
+  [PlaybackShortcut.RateDown]: "x",
+  [PlaybackShortcut.RateUp]: "c",
+};
 
 export const PLAYBACK_SEEK_STEP_MS = 5000;
 
@@ -108,6 +133,7 @@ export function formatPlaybackSeconds(milliseconds: number): string {
 export function playbackShortcut(
   event: Pick<KeyboardEvent, "key" | "repeat" | "ctrlKey" | "metaKey" | "altKey">,
   target: EventTarget | null,
+  bindings: PlaybackShortcutBindings = DEFAULT_PLAYBACK_SHORTCUT_BINDINGS,
 ): PlaybackShortcut | null {
   if (event.ctrlKey || event.metaKey || event.altKey) return null;
 
@@ -130,9 +156,8 @@ export function playbackShortcut(
   if (event.repeat) return null;
 
   const key = event.key.toLowerCase();
-  if (key === "x") return PlaybackShortcut.RateDown;
-  if (key === "c") return PlaybackShortcut.RateUp;
-  if (key === "z") return PlaybackShortcut.RateToggle;
+  const configuredShortcut = Object.entries(bindings).find(([, configuredKey]) => configuredKey === key)?.[0];
+  if (configuredShortcut) return configuredShortcut as keyof PlaybackShortcutBindings;
   if (event.key === " " && (allowsPlaybackShortcuts || (tagName !== "button" && tagName !== "a" && tagName !== "video"))) {
     return PlaybackShortcut.PlayToggle;
   }

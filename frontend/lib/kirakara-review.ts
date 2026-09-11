@@ -319,30 +319,37 @@ export function updateOuterMoraEdge(
   if (!reference) throw new RangeError("当前歌词行没有 Mora");
 
   const sourceMora = line.units[reference.unitIndex].moras[reference.moraIndex];
+  const previous = timeline.lines[lineIndex - 1];
+  const next = timeline.lines[lineIndex + 1];
   const requested = Number.isFinite(timeMs)
     ? Math.round(timeMs)
     : edge === "start" ? sourceMora.startMs : sourceMora.endMs;
   const nextTime = edge === "start"
-    ? Math.min(sourceMora.endMs - 1, Math.max(line.startMs, requested))
-    : Math.max(sourceMora.startMs + 1, Math.min(line.endMs, requested));
+    ? Math.min(sourceMora.endMs - 1, Math.max(previous?.endMs ?? 0, requested))
+    : Math.max(sourceMora.startMs + 1, Math.min(next?.startMs ?? Number.POSITIVE_INFINITY, requested));
   const lines = timeline.lines.map((candidate, candidateIndex): KirakaraLine => {
     if (candidateIndex !== lineIndex) return candidate;
     return {
       ...candidate,
-      units: candidate.units.map((unit, unitIndex) => unitIndex !== reference.unitIndex
-        ? unit
-        : {
-            ...unit,
-            moras: unit.moras.map((mora, moraIndex) => moraIndex !== reference.moraIndex
-              ? mora
-              : {
-                  ...mora,
-                  ...(edge === "start" ? { startMs: nextTime } : { endMs: nextTime }),
-                }),
-          }),
+      ...(edge === "start" ? { startMs: nextTime } : { endMs: nextTime }),
+      units: candidate.units.map((unit, unitIndex) => ({
+        ...unit,
+        startMs: edge === "start"
+          ? unitIndex === reference.unitIndex ? nextTime : Math.max(unit.startMs, nextTime)
+          : Math.min(unit.startMs, nextTime),
+        endMs: edge === "end"
+          ? unitIndex === reference.unitIndex ? nextTime : Math.min(unit.endMs, nextTime)
+          : Math.max(unit.endMs, nextTime),
+        moras: unit.moras.map((mora, moraIndex) => unitIndex !== reference.unitIndex || moraIndex !== reference.moraIndex
+          ? mora
+          : {
+              ...mora,
+              ...(edge === "start" ? { startMs: nextTime } : { endMs: nextTime }),
+            }),
+      })),
     };
   });
-  return { ...timeline, lines };
+  return { ...timeline, lines, durationMs: durationMs({ ...timeline, lines }) };
 }
 
 const MIN_MORA_DURATION_MS = 10;

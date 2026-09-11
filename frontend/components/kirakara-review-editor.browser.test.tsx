@@ -185,7 +185,7 @@ describe("KirakaraReviewEditor browser behavior", () => {
     expect(onChange).not.toHaveBeenCalled();
     fireEvent.blur(input);
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
-      lines: expect.arrayContaining([expect.objectContaining({ startMs: 1000, endMs: 2000 })]),
+      lines: expect.arrayContaining([expect.objectContaining({ startMs: 1100, endMs: 2000 })]),
     }));
   });
 

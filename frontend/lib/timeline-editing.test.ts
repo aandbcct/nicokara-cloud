@@ -108,6 +108,27 @@ describe("subtitle playback requirements", () => {
     expect(editing.playbackShortcut({ key: "x", repeat: true, ctrlKey: false, metaKey: false, altKey: false }, null)).toBeNull();
   });
 
+  it("REQ-SHORTCUT-01 maps U to the previous lyric by default", () => {
+    expect(editing.playbackShortcut({ key: "u", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.PreviousLine);
+  });
+
+  it("REQ-SHORTCUT-02 maps I to the next lyric by default", () => {
+    expect(editing.playbackShortcut({ key: "i", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.NextLine);
+  });
+
+  it("REQ-SHORTCUT-03 maps O to replaying the current lyric by default", () => {
+    expect(editing.playbackShortcut({ key: "o", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.ReplayLine);
+  });
+
+  it("REQ-SHORTCUT-04 maps P to toggling the current lyric loop by default", () => {
+    expect(editing.playbackShortcut({ key: "p", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.ToggleLineLoop);
+  });
+
+  it("REQ-SHORTCUT-05 resolves a customized playback shortcut", () => {
+    const bindings = { ...editing.DEFAULT_PLAYBACK_SHORTCUT_BINDINGS, [editing.PlaybackShortcut.RateUp]: "v" };
+    expect(editing.playbackShortcut({ key: "v", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null, bindings)).toBe(editing.PlaybackShortcut.RateUp);
+  });
+
   it("REQ-PLAY-06 resolves Space as a play toggle", () => {
     expect(editing.playbackShortcut({ key: " ", repeat: false, ctrlKey: false, metaKey: false, altKey: false }, null)).toBe(editing.PlaybackShortcut.PlayToggle);
   });

@@ -322,6 +322,58 @@ describe("KirakaraPreview browser behavior", () => {
     expect(Object.keys(window.localStorage)).toEqual([]);
   });
 
+  it("REQ-SHORTCUT-07 renders all quick-location and playback-rate shortcut settings", async () => {
+    await renderWorkbench("shortcut-settings");
+    expect(screen.getAllByLabelText(/^快捷键：/)).toHaveLength(7);
+    expect((screen.getByLabelText("快捷键：上一句") as HTMLInputElement).value).toBe("U");
+    expect((screen.getByLabelText("快捷键：提高倍速") as HTMLInputElement).value).toBe("C");
+  });
+
+  it("REQ-SHORTCUT-08 locates the previous lyric with U", async () => {
+    const { video, container } = await renderWorkbench("shortcut-previous");
+    installVideoBehavior(video);
+    fireEvent.click(screen.getByRole("button", { name: "2. 明日" }));
+    fireEvent.keyDown(window, { key: "u" });
+    expect(container.querySelector('[aria-label="当前歌词行时间轴：今日"]')).toBeTruthy();
+    expect(video.currentTime).toBe(0.9);
+  });
+
+  it("REQ-SHORTCUT-09 locates the next lyric with I", async () => {
+    const { video, container } = await renderWorkbench("shortcut-next");
+    installVideoBehavior(video);
+    fireEvent.click(screen.getByRole("button", { name: "1. 今日" }));
+    fireEvent.keyDown(window, { key: "i" });
+    expect(container.querySelector('[aria-label="当前歌词行时间轴：明日"]')).toBeTruthy();
+    expect(video.currentTime).toBe(2.9);
+  });
+
+  it("REQ-SHORTCUT-10 replays the current lyric with O without resuming a paused video", async () => {
+    const { video } = await renderWorkbench("shortcut-replay");
+    installVideoBehavior(video);
+    fireEvent.click(screen.getByRole("button", { name: "1. 今日" }));
+    video.currentTime = 1.7;
+    fireEvent.keyDown(window, { key: "o" });
+    expect(video.currentTime).toBe(1);
+    expect(video.play).not.toHaveBeenCalled();
+  });
+
+  it("REQ-SHORTCUT-11 toggles the current lyric loop with P", async () => {
+    const { video } = await renderWorkbench("shortcut-loop");
+    installVideoBehavior(video);
+    fireEvent.click(screen.getByRole("button", { name: "1. 今日" }));
+    fireEvent.keyDown(window, { key: "p" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "单句循环试听" }).getAttribute("aria-pressed")).toBe("true"));
+    expect(video.play).not.toHaveBeenCalled();
+  });
+
+  it("REQ-SHORTCUT-12 applies a customized playback-rate shortcut", async () => {
+    await renderWorkbench("shortcut-custom-rate");
+    fireEvent.keyDown(screen.getByLabelText("快捷键：提高倍速"), { key: "v" });
+    fireEvent.keyDown(window, { key: "v" });
+    expect((screen.getByLabelText("播放倍速") as HTMLSelectElement).value).toBe("1.1");
+    expect(window.localStorage.getItem("nicokara.timeline.playbackShortcuts")).toContain('"rate-up":"v"');
+  });
+
   it("REQ-SET-03 restores preview lead to 100ms", async () => {
     await renderWorkbench("lead-default");
     fireEvent.change(screen.getByLabelText("复听提前量（ms）"), { target: { value: "250" } });

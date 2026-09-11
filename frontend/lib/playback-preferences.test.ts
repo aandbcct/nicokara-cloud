@@ -44,4 +44,18 @@ describe("playback preview lead preferences", () => {
     preferences.savePreviewLeadMs({ setItem }, 250);
     expect(setItem).toHaveBeenCalledWith(preferences.PREVIEW_LEAD_STORAGE_KEY, "250");
   });
+
+  it("REQ-SHORTCUT-06 saves and reloads customized shortcut bindings", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+    const editing = {
+      ...preferences.loadPlaybackShortcutBindings(storage),
+      "rate-up": "v",
+    };
+    preferences.savePlaybackShortcutBindings(storage, editing);
+    expect(preferences.loadPlaybackShortcutBindings(storage)["rate-up"]).toBe("v");
+  });
 });

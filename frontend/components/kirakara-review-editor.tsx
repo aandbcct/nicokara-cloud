@@ -230,7 +230,7 @@ export function KirakaraReviewEditor({
   onEditingLineChange,
   onChange,
   onSeek,
-  canUndo = false, canRedo = false, onUndo, onRedo, onLoop,
+  canUndo = false, canRedo = false, onUndo, onRedo, looping = false, onLoopChange, onLoop,
 }: {
   timeline: KirakaraTimeline;
   editingLineIndex: number | null;
@@ -242,12 +242,13 @@ export function KirakaraReviewEditor({
   canRedo?: boolean;
   onUndo?: () => void;
   onRedo?: () => void;
+  looping?: boolean;
+  onLoopChange?: (looping: boolean) => void;
   onLoop?: (range: PlaybackRange | null) => void;
 }) {
   const [offset, setOffset] = useState("0.00");
   const [error, setError] = useState<string | null>(null);
   const [stepMs, setStepMs] = useState(10);
-  const [looping, setLooping] = useState(false);
   const [activeDrag, setActiveDrag] = useState<TimingDragTarget | null>(null);
   const [selectedBoundary, setSelectedBoundary] = useState<{
     lineIndex: number;
@@ -594,7 +595,7 @@ export function KirakaraReviewEditor({
                 className="focus-ring inline-flex size-9 items-center justify-center rounded-sm border hover:bg-muted disabled:opacity-40"><SkipBack className="size-4" /></button>
               <button type="button" title="下一句" aria-label="下一句" disabled={editingLineIndex >= timeline.lines.length - 1} onClick={() => onEditingLineChange(editingLineIndex + 1)}
                 className="focus-ring inline-flex size-9 items-center justify-center rounded-sm border hover:bg-muted disabled:opacity-40"><SkipForward className="size-4" /></button>
-              {onLoop && <button type="button" title="单句循环试听" aria-label="单句循环试听" aria-pressed={looping} onClick={() => setLooping(!looping)}
+              {onLoop && <button type="button" title="单句循环试听" aria-label="单句循环试听" aria-pressed={looping} onClick={() => onLoopChange?.(!looping)}
                 className={`focus-ring inline-flex size-9 items-center justify-center rounded-sm border ${looping ? "border-primary bg-primary/10 text-primary" : "hover:bg-muted"}`}><Repeat2 className="size-4" /></button>}
             </div>
           </div>
